@@ -12,6 +12,9 @@ class paths:
     raw_totalcapture_official_dir = 'data/dataset_raw/TotalCapture/official'    # contain official gt (S1/acting1/*.txt)
     totalcapture_dir = 'data/dataset_work/TotalCapture'          # output path for the preprocessed TotalCapture dataset
 
+    raw_amass_dir = 'data/dataset_raw/AMASS'   # raw DIP-IMU dataset path (raw_dipimu_dir/s_01/*.pkl)
+    amass_dir = 'data/dataset_work/AMASS'      # output path for the preprocessed DIP-IMU dataset
+
     example_dir = 'data/example'                    # example IMU measurements
     smpl_file = 'models/SMPL_male.pkl'              # official SMPL model path
     weights_file = 'data/weights.pt'                # network weight file

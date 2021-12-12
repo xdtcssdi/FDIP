@@ -9,6 +9,35 @@ import torch
 import os
 import pickle
 from config import paths
+from glob import glob
+import numpy as np
+
+def process_amass():
+    imu_mask = [7, 8, 11, 12, 0, 2]
+    train_split = []
+    test_split = ["SSM_synced", "TCD_handMocap", "Transitions_mocap"]
+    accs, oris, poses, trans = [], [], [], []
+
+    for subject in (train_split + test_split):
+        for path in glob(os.path.join(paths.amass_dir, subject, "**/*.npz"), recursive=True):
+            
+            data = np.load(path) # ['poses', 'gender', 'mocap_framerate', 'betas', 'trans']
+            print(list(data.keys()))
+            acc = torch.from_numpy(data['imu_acc'][:, imu_mask]).float()
+            ori = torch.from_numpy(data['imu_ori'][:, imu_mask]).float()
+            pose = torch.from_numpy(data['gt']).float()
+
+            acc, ori, pose = acc[6:-6], ori[6:-6], pose[6:-6]
+
+            accs.append(acc.clone())
+            oris.append(ori.clone())
+            poses.append(pose.clone())
+            trans.append(torch.zeros(pose.shape[0], 3))  # dip-imu does not contain translations
+            
+            
+    os.makedirs(paths.dipimu_dir, exist_ok=True)
+    torch.save({'acc': accs, 'ori': oris, 'pose': poses, 'tran': trans}, os.path.join(paths.dipimu_dir, 'test.pt'))
+    print('Preprocessed AMASS dataset is saved at', paths.dipimu_dir)
 
 
 def process_dipimu():
@@ -97,5 +126,6 @@ def process_totalcapture():
 
 
 if __name__ == '__main__':
-    process_dipimu()
-    process_totalcapture()
+    process_amass()
+    # process_dipimu()
+    # process_totalcapture()
