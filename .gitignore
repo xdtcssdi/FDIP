@@ -2,7 +2,13 @@ models/
 venv/
 .idea/
 *.mp4
-data/dataset_raw/
-data/dataset_work/
+data/dataset_raw/AMASS/*
+data/dataset_raw/DIP_IMU/*
+data/dataset_raw/TotalCapture/*
+
+data/dataset_work/AMASS/*
+data/dataset_work/DIP_IMU/*
+data/dataset_work/TotalCapture/*
+
 data/weights.pt
 __pycache__/
