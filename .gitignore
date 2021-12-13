@@ -2,6 +2,8 @@ models/
 venv/
 .idea/
 *.mp4
+
+!data/dataset_raw/AMASS/AMASS.MD
 data/dataset_raw/AMASS/*
 data/dataset_raw/DIP_IMU/*
 data/dataset_raw/TotalCapture/*

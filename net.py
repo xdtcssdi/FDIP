@@ -201,3 +201,21 @@ class TransPoseNet(torch.nn.Module):
         :return: Translation tensor in shape [num_frame, 3] for root positions.
         """
         return torch.stack([velocity[:i+1].sum(dim=0) for i in range(velocity.shape[0])])
+
+
+class Trainer(TransPoseNet):
+    def __init__(self, num_past_frame=20, num_future_frame=5, hip_length=None, upper_leg_length=None,
+                 lower_leg_length=None, prob_threshold=(0.5, 0.9), gravity_velocity=-0.018):
+        r"""
+        :param num_past_frame: Number of past frames for a biRNN window.
+        :param num_future_frame: Number of future frames for a biRNN window.
+        :param hip_length: Hip length in meters. SMPL mean length is used by default. Float or tuple of 2.
+        :param upper_leg_length: Upper leg length in meters. SMPL mean length is used by default. Float or tuple of 2.
+        :param lower_leg_length: Lower leg length in meters. SMPL mean length is used by default. Float or tuple of 2.
+        :param prob_threshold: The probability threshold used to control the fusion of the two translation branches.
+        :param gravity_velocity: The gravity velocity added to the Trans-B1 when the body is not on the ground.
+        """
+        super().__init__(num_past_frame=20, num_future_frame=5, hip_length=None, upper_leg_length=None,
+                 lower_leg_length=None, prob_threshold=(0.5, 0.9), gravity_velocity=-0.018)
+        
+    
