@@ -16,7 +16,8 @@ class paths:
     amass_dir = 'data/dataset_work/AMASS'      # output path for the preprocessed DIP-IMU dataset
 
     example_dir = 'data/example'                    # example IMU measurements
-    smpl_file = 'models/SMPL_male.pkl'              # official SMPL model path
+    male_smpl_file = 'models/SMPL_male.pkl'              # official SMPL model path
+    female_smpl_file = 'models/SMPL_female.pkl'              # official SMPL model path
     weights_file = 'data/weights.pt'                # network weight file
 
 
@@ -28,6 +29,10 @@ class joint_set:
 
     lower_body = [0, 1, 2, 4, 5, 7, 8, 10, 11]
     lower_body_parent = [None, 0, 0, 1, 2, 3, 4, 5, 6]
+
+    sensor = [18, 19, 4, 5, 15, 0, 1, 2, 9] # 传感器穿戴位置顺序
+    VERTEX_IDS = [1962, 5431, 1096, 4583, 412, 3021, 949, 4434, 3506]
+    SMPL_SENSOR = ['L_Elbow', 'R_Elbow', 'L_Knee', 'R_Knee', 'Head', 'Pelvis']
 
     n_leaf = len(leaf)
     n_full = len(full)

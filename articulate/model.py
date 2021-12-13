@@ -205,6 +205,39 @@ class ParametricModel:
         """
         return M.inverse_kinematics_T(T_global, self.parent)
 
+    def forward_kinematics_batch(self, pose: torch.Tensor, shape: torch.Tensor = None, tran: torch.Tensor = None,
+                           calc_mesh=False, batch_size=512):
+        r"""
+        Forward kinematics that computes the global joint rotation, joint position, and additionally
+        mesh vertex position from poses, shapes, and translations. (torch, batch)
+
+        :param pose: Joint local rotation tensor in shape [batch_size, *] that can reshape to
+                     [batch_size, num_joint, 3, 3] (rotation matrices).
+        :param shape: Tensor for model shapes that can expand to [batch_size, 10]. Use None for the mean(zero) shape.
+        :param tran: Root position tensor in shape [batch_size, 3]. Use None for the zero positions.
+        :param calc_mesh: Whether to calculate mesh vertex positions.
+        :return: Joint global rotation in [batch_size, num_joint, 3, 3],
+                 joint position in [batch_size, num_joint, 3],
+                 and additionally mesh vertex position in [batch_size, num_vertex, 3] if calc_mesh is True.
+        """
+        poses = torch.split(pose, batch_size, dim=0)
+        trans = torch.split(tran, batch_size, dim=0)
+        pose_globals, joint_globals, vertex_globals = [], [], []
+        for pose, tran in zip(poses, trans):
+            #print(pose.shape, tran.shape)
+            if calc_mesh is False:
+                pose_global, joint_global = self.forward_kinematics(pose, shape, tran, calc_mesh)
+            else:
+                pose_global, joint_global, vertex_global = self.forward_kinematics(pose, shape, tran, calc_mesh)
+                vertex_globals.append(vertex_global)
+            pose_globals.append(pose_global)
+            joint_globals.append(joint_global)
+        if calc_mesh is False:
+            return torch.cat(pose_globals, dim=0), torch.cat(joint_globals, dim=0)
+        else:
+            return torch.cat(pose_globals, dim=0), torch.cat(joint_globals, dim=0), torch.cat(vertex_globals, dim=0)
+
+
     def forward_kinematics(self, pose: torch.Tensor, shape: torch.Tensor = None, tran: torch.Tensor = None,
                            calc_mesh=False):
         r"""
