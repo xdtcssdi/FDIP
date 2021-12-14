@@ -1,11 +1,49 @@
 from einops import rearrange
 import torch
 import config
-from config import joint_set, paths, device
+from config import joint_set, paths
 import articulate as art
 # from utils import global2local
 
-body_model = art.ParametricModel(paths.smpl_file, device=device)
+class MyLoss(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.l2lLoss = torch.nn.MSELoss()
+
+    def forward(self, x, y):
+        leaf_joint_position, full_joint_position, global_reduced_pose, contact_probability, velocity, _ = x
+        leaf_joint_position_gt, full_joint_position_gt, global_reduced_pose_gt, contact_probability_gt, velocity_gt = y
+        
+        poseS1Loss = self.l2lLoss(leaf_joint_position, leaf_joint_position_gt)
+        poseS2Loss = self.l2lLoss(full_joint_position, full_joint_position_gt)
+        poseS3Loss = self.l2lLoss(global_reduced_pose, global_reduced_pose_gt)
+        tranB1loss = self.transB1Loss(contact_probability, contact_probability_gt)
+        tranB2loss = self.transB2Loss(velocity, velocity_gt)
+
+        return {"poseS1":poseS1Loss.item(), 
+                "poseS2": poseS2Loss.item(), 
+                "poseS3":poseS3Loss.item(), 
+                "tranB1":tranB1loss.item(), 
+                "tranB2":tranB2loss.item()}, poseS1Loss+poseS2Loss+poseS3Loss+tranB1loss+tranB2loss
+        
+    def transB1Loss(self, contact_prob: torch.Tensor, contact_prob_gt: torch.Tensor):
+        contact_prob = torch.clamp(contact_prob,min=1e-4,max=1-1e-4) # 限制概率不会出现nan
+        bceLoss = torch.nn.BCELoss()
+        loss = bceLoss(contact_prob, contact_prob_gt)
+        return loss
+
+    def transB2Loss(self, output: torch.Tensor, target: torch.Tensor):
+        def _TransB2Loss(output: torch.Tensor, target: torch.Tensor, n: int):
+            arr = torch.split(output - target, n, dim=0)
+            diff_sum = torch.stack([torch.norm(item, p=2, dim=-1).sum(dim=0) for item in arr]).mean()
+            return diff_sum
+
+        result = _TransB2Loss(output, target, 1) + _TransB2Loss(output, target, 3) + _TransB2Loss(
+            output, target, 9) + _TransB2Loss(output, target, 27)
+        return result
+
+        
+# body_model = art.ParametricModel(paths.smpl_file, device=device)
 l2lLoss = torch.nn.MSELoss()
 bceLoss = torch.nn.BCELoss()
 

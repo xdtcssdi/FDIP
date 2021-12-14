@@ -44,7 +44,7 @@ class TransPoseNet(torch.nn.Module):
         self.tran_b2 = RNN(joint_set.n_full * 3 + n_imu,  3,                          256,    bidirectional=False)
 
         # lower body joint
-        m = art.ParametricModel(paths.smpl_file)
+        m = art.ParametricModel(paths.male_smpl_file)
         j, _ = m.get_zero_pose_joint_and_vertex()
         b = art.math.joint_position_to_bone_vector(j[joint_set.lower_body].unsqueeze(0),
                                                    joint_set.lower_body_parent).squeeze(0)
@@ -77,8 +77,8 @@ class TransPoseNet(torch.nn.Module):
         self.last_root_pos = torch.zeros(3)
         self.reset()
 
-        self.load_state_dict(torch.load(paths.weights_file))
-        self.eval()
+        # self.load_state_dict(torch.load(paths.weights_file))
+        # self.eval()
 
     def _reduced_glb_6d_to_full_local_mat(self, root_rotation, glb_reduced_pose):
         glb_reduced_pose = art.math.r6d_to_rotation_matrix(glb_reduced_pose).view(-1, joint_set.n_reduced, 3, 3)
