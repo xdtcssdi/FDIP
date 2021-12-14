@@ -221,10 +221,11 @@ class ParametricModel:
                  and additionally mesh vertex position in [batch_size, num_vertex, 3] if calc_mesh is True.
         """
         poses = torch.split(pose, batch_size, dim=0)
+        if tran is None:
+            tran = torch.zeros((len(pose), 3))
         trans = torch.split(tran, batch_size, dim=0)
         pose_globals, joint_globals, vertex_globals = [], [], []
         for pose, tran in zip(poses, trans):
-            #print(pose.shape, tran.shape)
             if calc_mesh is False:
                 pose_global, joint_global = self.forward_kinematics(pose, shape, tran, calc_mesh)
             else:
