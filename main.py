@@ -1,7 +1,7 @@
 import argparse
 import os
-import time
-
+import numpy as np
+import random
 import torch
 import torch.backends.cudnn as cudnn
 from config import paths
@@ -9,6 +9,7 @@ from criterion import MyLoss
 from datasets import OwnDatasets
 from tqdm import tqdm
 from net import TransPoseNet
+from visdom import Visdom
 
 parser = argparse.ArgumentParser(description="This is a FDIP of %(prog)s", epilog="This is a epilog of %(prog)s", prefix_chars="-+", fromfile_prefix_chars="@", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument("-b", "--batch_size",metavar="批次数量", type=int, required=True)
@@ -37,6 +38,7 @@ parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
 parser.add_argument('--epochs', default=300, type=int, metavar='N',
                     help='number of total epochs to run')
 parser.add_argument('--batch_first', action="store_false", help="isFirst")
+parser.add_argument('--visdom', action="store_true", help="visdom")
 
 def train(train_loader, model, criterion, optimizer, epoch):
     """
@@ -86,12 +88,12 @@ def train(train_loader, model, criterion, optimizer, epoch):
                 f"Train[{epoch}/{args.epochs}] lr={optimizer.param_groups[0]['lr']}")
         bar.set_postfix(**{k:v for k,v in loss_dict.items()})
         
-        # compute gradient and do SGD step
+        # compute gradient and do Adam step
         optimizer.zero_grad()
         totalLoss.backward()
         optimizer.step()
 
-        losses.update(totalLoss.item(), imu.size(1))
+        losses.update(loss_dict)
 
         # measure elapsed time
         # if i % args.print_freq == 0:
@@ -101,7 +103,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
         #           'Loss {loss.val:.4f} ({loss.avg:.4f})'.format(
         #               epoch, i, len(train_loader), batch_time=batch_time,
         #               data_time=data_time, loss=losses))
-
+    return losses
 
 def validate(val_loader, model, criterion):
     """
@@ -151,7 +153,7 @@ def validate(val_loader, model, criterion):
         bar.set_postfix(**{k:v for k,v in loss_dict.items()})
 
         # measure accuracy and record loss
-        losses.update(totalLoss.item(), imu.size(1))
+        losses.update(loss_dict)
 
         # measure elapsed time
 
@@ -161,7 +163,7 @@ def validate(val_loader, model, criterion):
         #           'Loss {loss.val:.4f} ({loss.avg:.4f})'.format(
         #               i, len(val_loader), batch_time=batch_time, loss=losses))
 
-    return
+    return losses
 
 def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
     """
@@ -175,17 +177,27 @@ class AverageMeter(object):
         self.reset()
 
     def reset(self):
-        self.val = 0
-        self.avg = 0
-        self.sum = 0
+        self.sum =  {"poseS1":0, 
+                "poseS2": 0, 
+                "poseS3":0, 
+                "tranB1":0, 
+                "tranB2":0}
+        self.__avg =  {"poseS1":0, 
+                "poseS2": 0, 
+                "poseS3":0, 
+                "tranB1":0, 
+                "tranB2":0}
         self.count = 0
 
-    def update(self, val, n=1):
-        self.val = val
-        self.sum += val * n
-        self.count += n
-        self.avg = self.sum / self.count
+    def update(self, loss_dict):
+        for k, v in loss_dict.items():
+            self.sum[k] += v
+        self.count += 1
 
+    def avg(self):
+        for k in self.sum.keys():
+            self.__avg[k] = self.sum[k]/self.count
+        return self.__avg
 
 def adjust_learning_rate(optimizer, epoch):
     """Sets the learning rate to the initial LR decayed by 2 every 30 epochs"""
@@ -193,12 +205,23 @@ def adjust_learning_rate(optimizer, epoch):
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
 
+def setup_seed(seed):
+     torch.manual_seed(seed)
+     torch.cuda.manual_seed_all(seed)
+     np.random.seed(seed)
+     random.seed(seed)
+     torch.backends.cudnn.deterministic = True
 
 def main():
+    setup_seed(20)
     global args
     args = parser.parse_args()
     for arg in vars(args):
-        print(arg, getattr(args, arg))
+        print(arg, '==' ,getattr(args, arg))
+
+    # visdom log
+    viz = Visdom(port=6324)
+
     # Check the save_dir exists or not
     if not os.path.exists(args.save_dir):
         os.makedirs(args.save_dir)
@@ -220,7 +243,7 @@ def main():
     
     cudnn.benchmark = True
 
-    train_dataset = OwnDatasets(os.path.join(paths.amass_dir, "veri.pt"))
+    train_dataset = OwnDatasets(os.path.join(paths.amass_dir, "train.pt"))
     val_dataset = OwnDatasets(os.path.join(paths.amass_dir, "veri.pt"))
     
     train_loader = torch.utils.data.DataLoader(train_dataset,
@@ -230,7 +253,7 @@ def main():
     val_loader = torch.utils.data.DataLoader(val_dataset,
         batch_size=args.batch_size, shuffle=False,
         num_workers=args.workers, pin_memory=True)
-
+    print(f"训练集{len(train_loader)}, 验证集{len(val_loader)}")
     # 
     criterion = MyLoss()
     if args.cuda:
@@ -253,10 +276,14 @@ def main():
         adjust_learning_rate(optimizer, epoch)
 
         # train for one epoch
-        train(train_loader, model, criterion, optimizer, epoch)
-
+        train_loss = train(train_loader, model, criterion, optimizer, epoch)
+        for k, v in train_loss.avg().items():            
+            viz.line([v], [epoch],win=k+' line', opts=dict(title="train:"+ k), update='append')
+        
         # evaluate on validation set
-        validate(val_loader, model, criterion)
+        validate_loss = validate(val_loader, model, criterion)
+        for k, v in validate_loss.avg().items():
+            viz.line([v], [epoch], win=k+'val line', opts=dict(title="val:"+ k), update='append')
 
         # remember best prec@1 and save checkpoint
         is_best = True

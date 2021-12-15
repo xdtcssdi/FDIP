@@ -107,7 +107,6 @@ def process_amass(seq_len = 300, train=True):
     veri_split = ["ACCAD", "DFaust_67", "SFU", "EKUT", "HumanEva", "SSM_synced", "MPI_Limits"]
     accs_arr, oris_arr, poses_arr, trans_arr, jtr_arr = [], [], [], [], []
     
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     total_seq_len = 0
     for subject in tqdm(train_split if train else veri_split):
         for path in tqdm(glob(os.path.join(paths.amass_dir, subject, "**/*.npz"), recursive=True)):
@@ -141,14 +140,14 @@ def process_amass(seq_len = 300, train=True):
             for p, t, j, ori, acc in zip(pose_6ds, trans, joint_globals, oris, accs):
                 if len(p) != seq_len: continue
                 total_seq_len += seq_len
-                accs_arr.append(acc.clone())
-                oris_arr.append(ori.clone())
-                poses_arr.append(p.clone())
-                trans_arr.append(t.clone())
-                jtr_arr.append(j.clone())
+                accs_arr.append(acc.clone().numpy())
+                oris_arr.append(ori.clone().numpy())
+                poses_arr.append(p.clone().numpy())
+                trans_arr.append(t.clone().numpy())
+                jtr_arr.append(j.clone().numpy())
                 
     os.makedirs(paths.amass_dir, exist_ok=True)
-    torch.save( {'acc': accs_arr, 'ori': oris_arr, 'pose': poses_arr, 'tran': trans_arr, 'jp':jtr_arr}, os.path.join(paths.amass_dir, 'train.pt' if train else "veri.pt"))
+    np.savez(os.path.join(paths.amass_dir, 'train' if train else "veri"), **{'acc': accs_arr, 'ori': oris_arr, 'pose': poses_arr, 'tran': trans_arr, 'jp':jtr_arr})
     print(total_seq_len // 3600, " Minutes")
 
 def process_dipimu_test():
@@ -239,6 +238,6 @@ def process_totalcapture():
 if __name__ == '__main__':
     # del_dirty_data()
     # pre_process_amass()
-    process_amass(train=False)
+    process_amass(train=True)
     # process_dipimu()
     # process_totalcapture()

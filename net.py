@@ -103,12 +103,14 @@ class TransPoseNet(torch.nn.Module):
         self.last_lfoot_pos, self.last_rfoot_pos = self.feet_pos
         self.last_root_pos = torch.zeros(3)
 
-    def forward(self, imu, rnn_state=None):
+    def forward(self, input, rnn_state=None):
+        imu, leaf_jtr, full_jtr =  input
+
         leaf_joint_position = self.pose_s1.forward(imu)[0]
-        full_joint_position = self.pose_s2.forward(torch.cat((leaf_joint_position, imu), dim=-1))[0]
-        global_reduced_pose = self.pose_s3.forward(torch.cat((full_joint_position, imu), dim=-1))[0]
-        contact_probability = self.tran_b1.forward(torch.cat((leaf_joint_position, imu), dim=-1))[0]
-        velocity, rnn_state = self.tran_b2.forward(torch.cat((full_joint_position, imu), dim=-1), rnn_state)
+        full_joint_position = self.pose_s2.forward(torch.cat((leaf_jtr, imu), dim=-1))[0]
+        global_reduced_pose = self.pose_s3.forward(torch.cat((full_jtr, imu), dim=-1))[0]
+        contact_probability = self.tran_b1.forward(torch.cat((leaf_jtr, imu), dim=-1))[0]
+        velocity, rnn_state = self.tran_b2.forward(torch.cat((full_jtr, imu), dim=-1), rnn_state)
         return leaf_joint_position, full_joint_position, global_reduced_pose, contact_probability, velocity, rnn_state
 
     @torch.no_grad()

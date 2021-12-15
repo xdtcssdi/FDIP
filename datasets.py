@@ -57,3 +57,4 @@ if __name__ == "__main__":
         print(stable.shape)
         print(velocity_local.shape)
         print(root_ori.shape)
+        break
