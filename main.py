@@ -80,7 +80,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
 
 
         # compute output
-        output = model(imu)            
+        output = model((imu, leaf_jtr, full_jtr))            
         target = (leaf_jtr, full_jtr, nn_pose, stable, velocity_local)
         loss_dict, totalLoss = criterion(output, target)
 
@@ -145,7 +145,7 @@ def validate(val_loader, model, criterion):
 
         # compute output
         with torch.no_grad():
-            output = model(imu)
+            output = model((imu, leaf_jtr, full_jtr))
             target = (leaf_jtr, full_jtr, nn_pose, stable, velocity_local)
             loss_dict, totalLoss = criterion(output, target)
 
@@ -181,12 +181,14 @@ class AverageMeter(object):
                 "poseS2": 0, 
                 "poseS3":0, 
                 "tranB1":0, 
-                "tranB2":0}
+                "tranB2":0,
+                "contact_prob":0}
         self.__avg =  {"poseS1":0, 
                 "poseS2": 0, 
                 "poseS3":0, 
                 "tranB1":0, 
-                "tranB2":0}
+                "tranB2":0,
+                "contact_prob":0}
         self.count = 0
 
     def update(self, loss_dict):
@@ -234,7 +236,7 @@ def main():
         if os.path.isfile(args.resume):
             print("=> loading checkpoint '{}'".format(args.resume))
             checkpoint = torch.load(args.resume)
-            args.start_epoch = checkpoint['epoch']
+            args.start_epoch = checkpoint['epoch'] if not args.fineturning else 0
             model.load_state_dict(checkpoint['state_dict'])
             print("=> loaded checkpoint '{}' (epoch {})"
                   .format(args.evaluate, checkpoint['epoch']))

@@ -15,6 +15,17 @@ from tqdm import tqdm
 import articulate as art
 
 def get_ori_acc(poses_global_rotation, vertexs, frame_rate, n):
+    """从全局旋转和全局顶点位置中计算虚拟IMU方向和加速度
+
+    Args:
+        poses_global_rotation ([type]): [description]
+        vertexs ([type]): [description]
+        frame_rate ([type]): [description]
+        n ([type]): [description]
+
+    Returns:
+        [type]: [description]
+    """
     orientation = []  # 旋转矩阵
     acceleration = []  # 加速度
     ori = poses_global_rotation[:, joint_set.sensor][n:-n].cpu().numpy()
@@ -35,16 +46,30 @@ def get_ori_acc(poses_global_rotation, vertexs, frame_rate, n):
     return torch.from_numpy(ori), torch.from_numpy(acc)
 
 def compute_imu_data(body_model, poses, trans, device):
+    """从轴角姿态和位移中计算全局旋转、全局关节位置和全局顶点位移
+
+    Args:
+        body_model ([type]): [description]
+        poses ([type]): [description]
+        trans ([type]): [description]
+        device ([type]): [description]
+
+    Returns:
+        [type]: [description]
+    """
     poses = torch.from_numpy(poses).to(device)
     if not trans is None:
         trans = torch.from_numpy(trans).to(device)
-
+    else:
+        trans = torch.zeros((len(poses), 3), device=device)
     poses = art.math.axis_angle_to_rotation_matrix(poses).view(-1, 24, 3, 3)
+
     pose_global, joint_global, vertex_global = body_model.forward_kinematics_batch(poses, tran=trans, calc_mesh=True)
     return pose_global, joint_global, vertex_global
     
 def pre_process_amass():
-
+    """为每个数据集计算全局旋转，全局关节位置和全局顶点位置 保存为npz文件
+    """
     train_split = ["BioMotionLab_NTroje", "BMLhandball", "BMLmovi", "CMU", "MPI_mosh", "DanceDB", "Eyes_Japan_Dataset", "MPI_HDM05", "KIT"]
     test_split = ["ACCAD", "DFaust_67", "SFU", "EKUT", "HumanEva", "SSM_synced", "MPI_Limits"]
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -91,6 +116,11 @@ def pre_process_amass():
     print('Preprocessed AMASS dataset is saved at', paths.amass_dir)
 
 def del_dirty_data():
+    """清理BioMotionLab_NTroje数据集中无用数据
+
+    Returns:
+        [type]: [description]
+    """
     match_file = os.path.join(paths.amass_dir, "BioMotionLab_NTroje", "**/*.npz")
     files = list(glob(match_file))
     filter_list = ['treadmill', 'motorcycle', 'walk', 'jog', 'knocking']
@@ -103,6 +133,12 @@ def del_dirty_data():
         os.remove(file)
     
 def process_amass(seq_len = 300, train=True):
+    """从预处理的amass数据中分割数据集，并且保存9个加速度、9个旋转、15个6d姿态、位移和全局关节位置
+
+    Args:
+        seq_len (int, optional): [description]. Defaults to 300.
+        train (bool, optional): [description]. Defaults to True.
+    """
     train_split = ["BioMotionLab_NTroje", "BMLhandball", "BMLmovi", "CMU", "MPI_mosh", "DanceDB", "Eyes_Japan_Dataset", "MPI_HDM05", "KIT"]
     veri_split = ["ACCAD", "DFaust_67", "SFU", "EKUT", "HumanEva", "SSM_synced", "MPI_Limits"]
     accs_arr, oris_arr, poses_arr, trans_arr, jtr_arr = [], [], [], [], []
@@ -128,8 +164,6 @@ def process_amass(seq_len = 300, train=True):
             tran = tran[n:-n]
             joint_global = joint_global[n:-n]
             
-            # print(pose_6d.shape, tran.shape, joint_global.shape, ori.shape, acc.shape)
-
             # 分割为batch
             pose_6ds = torch.split(pose_6d, seq_len)
             trans = torch.split(tran, seq_len)
@@ -140,15 +174,114 @@ def process_amass(seq_len = 300, train=True):
             for p, t, j, ori, acc in zip(pose_6ds, trans, joint_globals, oris, accs):
                 if len(p) != seq_len: continue
                 total_seq_len += seq_len
-                accs_arr.append(acc.clone().numpy())
-                oris_arr.append(ori.clone().numpy())
-                poses_arr.append(p.clone().numpy())
-                trans_arr.append(t.clone().numpy())
-                jtr_arr.append(j.clone().numpy())
+                accs_arr.append(acc.clone())
+                oris_arr.append(ori.clone())
+                poses_arr.append(p.clone())
+                trans_arr.append(t.clone())
+                jtr_arr.append(j.clone())
                 
     os.makedirs(paths.amass_dir, exist_ok=True)
-    np.savez(os.path.join(paths.amass_dir, 'train' if train else "veri"), **{'acc': accs_arr, 'ori': oris_arr, 'pose': poses_arr, 'tran': trans_arr, 'jp':jtr_arr})
+    # np.savez(os.path.join(paths.amass_dir, 'train' if train else "veri"), **{'acc': accs_arr, 'ori': oris_arr, 'pose': poses_arr, 'tran': trans_arr, 'jp':jtr_arr})
+    torch.save({'acc': accs_arr, 'ori': oris_arr, 'pose': poses_arr, 'tran': trans_arr, 'jp':jtr_arr}, os.path.join(paths.amass_dir, 'train.pt' if train else "veri.pt"))
     print(total_seq_len // 3600, " Minutes")
+
+
+def pre_process_dipimu_train():
+
+    train_split = ['s_01', 's_02', 's_03', 's_04', 's_05', 's_06', 's_07', 's_08']
+    test_split = ['s_09', 's_10']
+
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+    for subject_name in (train_split + test_split):
+        for motion_name in os.listdir(os.path.join(paths.raw_dipimu_dir, subject_name)):
+            path = os.path.join(paths.raw_dipimu_dir, subject_name, motion_name)
+            
+            dirs, filename = os.path.split(path)
+            dirs = dirs.replace("dataset_raw", "dataset_work")
+            if filename == "shape.npz": continue # 过滤shape文件
+            new_file = os.path.join(dirs, filename)
+            #print(new_file)
+            if(os.path.isfile(new_file)):continue
+
+            data = pickle.load(open(path, 'rb'), encoding='latin1')
+            acc = torch.from_numpy(data['imu_acc'][:, joint_set.dip_imu]).float()
+            ori = torch.from_numpy(data['imu_ori'][:, joint_set.dip_imu]).float()
+            pose = torch.from_numpy(data['gt']).float()
+
+            # fill nan with nearest neighbors
+            for _ in range(4):
+                acc[1:].masked_scatter_(torch.isnan(acc[1:]), acc[:-1][torch.isnan(acc[1:])])
+                ori[1:].masked_scatter_(torch.isnan(ori[1:]), ori[:-1][torch.isnan(ori[1:])])
+                acc[:-1].masked_scatter_(torch.isnan(acc[:-1]), acc[1:][torch.isnan(acc[:-1])])
+                ori[:-1].masked_scatter_(torch.isnan(ori[:-1]), ori[1:][torch.isnan(ori[:-1])])
+
+            acc, ori, pose = acc[6:-6], ori[6:-6], pose[6:-6]
+            if torch.isnan(acc).sum() == 0 and torch.isnan(ori).sum() == 0 and torch.isnan(pose).sum() == 0:
+                body_model = art.model.ParametricModel(paths.male_smpl_file, device=device) # 根据性别选择模型
+        
+                pose_global, joint_global, _ = compute_imu_data(body_model, pose.numpy(), None, device)
+                isExists = os.path.exists(dirs)
+                if not isExists: os.makedirs(dirs) 
+            
+                np.savez(new_file[:-4], pose_global=pose_global.cpu().numpy(), tran=None, \
+                        joint_global=joint_global.cpu().numpy(), acc=acc.cpu().numpy(), ori=ori.cpu().numpy())
+                        
+                # accs.append(acc.clone())
+                # oris.append(ori.clone())
+                # poses.append(pose.clone())
+                # trans.append(torch.zeros(pose.shape[0], 3))  # dip-imu does not contain translations
+            else:
+                print('DIP-IMU: %s/%s has too much nan! Discard!' % (subject_name, motion_name))
+
+    # os.makedirs(paths.dipimu_dir, exist_ok=True)
+    # torch.save({'acc': accs, 'ori': oris, 'pose': poses, 'tran': trans}, os.path.join(paths.dipimu_dir, 'test.pt'))
+    print('Preprocessed DIP-IMU dataset is saved at', paths.dipimu_dir)
+
+def process_dip(seq_len = 300, train=True):
+    train_split = ['s_01', 's_02', 's_03', 's_04', 's_05', 's_06', 's_07', 's_08']
+    test_split = ['s_09', 's_10']
+    accs_arr, oris_arr, poses_arr, trans_arr, jtr_arr = [], [], [], [], []
+    
+    total_seq_len = 0
+    for subject in tqdm(train_split if train else test_split):
+        for path in tqdm(glob(os.path.join(paths.dipimu_dir, subject, "**/*.npz"), recursive=True)):
+            print(path)
+            data = np.load(path)
+            pose_global = torch.from_numpy(data['pose_global'])
+            joint_global = torch.from_numpy(data['joint_global'])
+
+            # 提取15个姿态，并且转为6d旋转
+            pose_mtx = torch.einsum("nij,nkjm->nkim", pose_global[:, 0].transpose(1, 2), pose_global)
+            pose_6d = art.math.rotation_matrix_to_r6d(pose_mtx).reshape(-1, 24, 6)[:, joint_set.reduced]
+
+            ori = torch.from_numpy(data['ori'])[:, :6]
+            acc = torch.from_numpy(data['acc'])[:, :6]
+
+            # print(pose_6d.shape, joint_global.shape, ori.shape, acc.shape)
+
+            # 分割为batch
+            pose_6ds = torch.split(pose_6d, seq_len)
+            joint_globals = torch.split(joint_global, seq_len)
+            oris = torch.split(ori, seq_len)
+            accs = torch.split(acc, seq_len)
+
+            for p, j, ori, acc in zip(pose_6ds, joint_globals, oris, accs):
+                if len(p) != seq_len: continue
+                total_seq_len += seq_len
+                accs_arr.append(acc.clone())
+                oris_arr.append(ori.clone())
+                poses_arr.append(p.clone())
+                trans_arr.append(None)
+                jtr_arr.append(j.clone())
+                
+    os.makedirs(paths.dipimu_dir, exist_ok=True)
+    # np.savez(os.path.join(paths.dipimu_dir, 'train' if train else "veri"), **{'acc': accs_arr, 'ori': oris_arr, 'pose': poses_arr, 'tran': trans_arr, 'jp':jtr_arr})
+    torch.save({'acc': accs_arr, 'ori': oris_arr, 'pose': poses_arr, 'tran': trans_arr, 'jp':jtr_arr}, os.path.join(paths.dipimu_dir, 'train.pt' if train else "veri.pt"))
+
+    print(total_seq_len // 3600, " Minutes")
+
+
 
 def process_dipimu_test():
     imu_mask = [7, 8, 11, 12, 0, 2]
@@ -238,6 +371,11 @@ def process_totalcapture():
 if __name__ == '__main__':
     # del_dirty_data()
     # pre_process_amass()
-    process_amass(train=True)
+    # process_amass(train=True)
+    # process_dipimu_train(train=False)
     # process_dipimu()
     # process_totalcapture()
+    # process_dip()
+    # pre_process_dipimu_train()
+
+    process_dip(train=False)

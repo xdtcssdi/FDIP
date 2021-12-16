@@ -3,7 +3,6 @@ import torch
 from config import paths, joint_set
 import config
 from utils import normalize_and_concat
-
 import os
 
 class OwnDatasets(Dataset):
@@ -19,7 +18,8 @@ class OwnDatasets(Dataset):
 
     def __getitem__(self, idx):
         nn_pose = self.pose[idx].float()
-        tran = self.tran[idx].float()
+        if self.tran[idx] is not None:
+            tran = self.tran[idx].float()
         ori = self.ori[idx][:, self.use_joint].float()
         acc = self.acc[idx][:, self.use_joint].float()
         joint_pos = self.point[idx].float()
@@ -27,10 +27,12 @@ class OwnDatasets(Dataset):
         imu = normalize_and_concat(acc, ori)
 
         # 世界速度->本地速度
-        velocity = tran
-        velocity_local = root_ori.transpose(1, 2).bmm(
-            torch.cat((torch.zeros(1, 3), velocity[1:] - velocity[:-1])).unsqueeze(-1)).squeeze(-1) * 60 / config.vel_scale
-        
+        if self.tran[idx] is not None:
+            velocity = tran
+            velocity_local = root_ori.transpose(1, 2).bmm(
+                torch.cat((torch.zeros(1, 3), velocity[1:] - velocity[:-1])).unsqueeze(-1)).squeeze(-1) * 60 / config.vel_scale
+        else:
+            velocity_local = None
         # 支撑腿
         stable_threshold = 0.008
         diff = joint_pos - torch.cat((joint_pos[:1], joint_pos[:-1]))
@@ -48,13 +50,14 @@ class OwnDatasets(Dataset):
         return len(self.ori)
 
 if __name__ == "__main__":
-    dataset = OwnDatasets(os.path.join(paths.amass_dir, "veri.pt"))
+    dataset = OwnDatasets(os.path.join(paths.dipimu_dir, "veri.pt"))
     for imu, nn_pose,leaf_jtr, full_jtr, stable, velocity_local, root_ori in dataset:
         print(imu.shape)
         print(nn_pose.shape)
         print(leaf_jtr.shape)
         print(full_jtr.shape)
         print(stable.shape)
-        print(velocity_local.shape)
+        if velocity_local is not None:
+            print(velocity_local.shape)
         print(root_ori.shape)
         break

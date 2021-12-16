@@ -107,10 +107,20 @@ class TransPoseNet(torch.nn.Module):
         imu, leaf_jtr, full_jtr =  input
 
         leaf_joint_position = self.pose_s1.forward(imu)[0]
-        full_joint_position = self.pose_s2.forward(torch.cat((leaf_jtr, imu), dim=-1))[0]
-        global_reduced_pose = self.pose_s3.forward(torch.cat((full_jtr, imu), dim=-1))[0]
-        contact_probability = self.tran_b1.forward(torch.cat((leaf_jtr, imu), dim=-1))[0]
-        velocity, rnn_state = self.tran_b2.forward(torch.cat((full_jtr, imu), dim=-1), rnn_state)
+
+        leaf_joint_position_gt_addG = leaf_jtr + torch.normal(mean=0, std=0.04, size= leaf_jtr.shape).to(imu.device)
+        full_joint_position = self.pose_s2.forward(torch.cat((leaf_joint_position_gt_addG, imu), dim=-1))[0]
+
+        full_joint_position_gt_addG = full_jtr + torch.normal(mean=0, std=0.025, size=full_jtr.shape).to(imu.device)
+        global_reduced_pose = self.pose_s3.forward(torch.cat((full_joint_position_gt_addG, imu), dim=-1))[0]
+        
+        x1 = torch.cat((leaf_jtr, imu), dim=-1)
+        x1 += torch.normal(mean=x1, std=0.04).to(imu.device)
+        x2 = torch.cat((full_jtr, imu), dim=-1)
+        x2 += torch.normal(mean=x2, std=0.025).to(imu.device)
+
+        contact_probability = self.tran_b1.forward(x1)[0]
+        velocity, rnn_state = self.tran_b2.forward(x2, rnn_state)
         return leaf_joint_position, full_joint_position, global_reduced_pose, contact_probability, velocity, rnn_state
 
     @torch.no_grad()

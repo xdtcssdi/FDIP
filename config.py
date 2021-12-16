@@ -31,6 +31,7 @@ class joint_set:
     lower_body_parent = [None, 0, 0, 1, 2, 3, 4, 5, 6]
 
     sensor = [18, 19, 4, 5, 15, 0, 1, 2, 9] # 传感器穿戴位置顺序
+    dip_imu = [7, 8, 11, 12, 0, 2, 9, 10, 1]
     VERTEX_IDS = [1962, 5431, 1096, 4583, 412, 3021, 949, 4434, 3506]
     SMPL_SENSOR = ['L_Elbow', 'R_Elbow', 'L_Knee', 'R_Knee', 'Head', 'Pelvis']
 

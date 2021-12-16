@@ -17,14 +17,16 @@ class MyLoss(torch.nn.Module):
         poseS1Loss = self.l2lLoss(leaf_joint_position, leaf_joint_position_gt)
         poseS2Loss = self.l2lLoss(full_joint_position, full_joint_position_gt)
         poseS3Loss = self.l2lLoss(global_reduced_pose, global_reduced_pose_gt)
-        tranB1loss = self.transB1Loss(contact_probability, contact_probability_gt)
+        tranB1loss = self.transB1Loss(contact_probability.sigmoid(), contact_probability_gt)
         tranB2loss = self.transB2Loss(velocity, velocity_gt)
+        contact_prob = foot_accuracy(contact_probability.sigmoid(), contact_probability_gt)
 
         return {"poseS1":poseS1Loss.item(), 
                 "poseS2": poseS2Loss.item(), 
                 "poseS3":poseS3Loss.item(), 
                 "tranB1":tranB1loss.item(), 
-                "tranB2":tranB2loss.item()}, poseS1Loss+poseS2Loss+poseS3Loss+tranB1loss+tranB2loss
+                "tranB2":tranB2loss.item(),
+                "contact_prob": contact_prob}, poseS1Loss+poseS2Loss+poseS3Loss+tranB1loss+tranB2loss
         
     def transB1Loss(self, contact_prob: torch.Tensor, contact_prob_gt: torch.Tensor):
         contact_prob = torch.clamp(contact_prob,min=1e-4,max=1-1e-4) # 限制概率不会出现nan
