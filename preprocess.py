@@ -1,10 +1,3 @@
-r"""
-    Preprocess DIP-IMU and TotalCapture test dataset.
-
-    Please refer to the `paths` in `config.py` and set the path of each dataset correctly.
-"""
-
-
 import torch
 import os
 import pickle
@@ -187,7 +180,8 @@ def process_amass(seq_len = 300, train=True):
 
 
 def pre_process_dipimu_train():
-
+    """DIP微调数据集预处理生成npz
+    """
     train_split = ['s_01', 's_02', 's_03', 's_04', 's_05', 's_06', 's_07', 's_08']
     test_split = ['s_09', 's_10']
 
@@ -239,6 +233,12 @@ def pre_process_dipimu_train():
     print('Preprocessed DIP-IMU dataset is saved at', paths.dipimu_dir)
 
 def process_dip(seq_len = 300, train=True):
+    """合成DIP数据集
+
+    Args:
+        seq_len (int, optional): [description]. Defaults to 300.
+        train (bool, optional): [description]. Defaults to True.
+    """
     train_split = ['s_01', 's_02', 's_03', 's_04', 's_05', 's_06', 's_07', 's_08']
     test_split = ['s_09', 's_10']
     accs_arr, oris_arr, poses_arr, trans_arr, jtr_arr = [], [], [], [], []
@@ -282,8 +282,9 @@ def process_dip(seq_len = 300, train=True):
     print(total_seq_len // 3600, " Minutes")
 
 
-
 def process_dipimu_test():
+    """最终的测试代码
+    """
     imu_mask = [7, 8, 11, 12, 0, 2]
     test_split = ['s_09', 's_10']
     accs, oris, poses, trans = [], [], [], []
@@ -378,4 +379,5 @@ if __name__ == '__main__':
     # process_dip()
     # pre_process_dipimu_train()
 
-    process_dip(train=False)
+    # process_dip(train=False)
+    process_dipimu_test()

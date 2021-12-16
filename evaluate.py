@@ -13,7 +13,7 @@ from utils import normalize_and_concat
 
 class PoseEvaluator:
     def __init__(self):
-        self._eval_fn = art.FullMotionEvaluator(paths.smpl_file, joint_mask=torch.tensor([1, 2, 16, 17]))
+        self._eval_fn = art.FullMotionEvaluator(paths.male_smpl_file, joint_mask=torch.tensor([1, 2, 16, 17]))
 
     def eval(self, pose_p, pose_t):
         pose_p = pose_p.clone().view(-1, 24, 3, 3)
@@ -34,6 +34,8 @@ def evaluate_pose(dataset, num_past_frame=20, num_future_frame=5):
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     evaluator = PoseEvaluator()
     net = TransPoseNet(num_past_frame, num_future_frame).to(device)
+    checkpoint = torch.load("save_temp/checkpoint_fineturning_350.tar")
+    net.load_state_dict(checkpoint['state_dict'])
     data = torch.load(os.path.join(dataset, 'test.pt'))
     xs = [normalize_and_concat(a, r).unsqueeze(1).to(device) for a, r in zip(data['acc'], data['ori'])]
     ys = [(art.math.axis_angle_to_rotation_matrix(p).view(-1, 24, 3, 3), t) for p, t in zip(data['pose'], data['tran'])]

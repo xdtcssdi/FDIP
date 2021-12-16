@@ -26,7 +26,7 @@ parser.add_argument('--half', dest='half', action='store_true',
                     help='use half-precision(16-bit) ')
 parser.add_argument('--lr', '--learning-rate', default=1e-3, type=float,
                     metavar='LR', help='initial learning rate')
-parser.add_argument('--weight-decay', '--wd', default=5e-4, type=float,
+parser.add_argument('--weight-decay', '--wd', default=0, type=float,
                     metavar='W', help='weight decay (default: 5e-4)')
 parser.add_argument('--print-freq', '-p', default=20, type=int,
                     metavar='N', help='print frequency (default: 20)')
@@ -40,11 +40,11 @@ parser.add_argument('--epochs', default=300, type=int, metavar='N',
 parser.add_argument('--batch_first', action="store_false", help="isFirst")
 parser.add_argument('--visdom', action="store_true", help="visdom")
 
-def train(train_loader, model, criterion, optimizer, epoch):
+def train(train_loader, model, criterion, optimizer, epoch, refine=False):
     """
         Run one train epoch
     """
-    losses = AverageMeter()
+    losses = AverageMeter(refine)
 
     # switch to train mode
     model.train()
@@ -57,8 +57,9 @@ def train(train_loader, model, criterion, optimizer, epoch):
             nn_pose = nn_pose.transpose(0, 1)
             leaf_jtr = leaf_jtr.transpose(0, 1)
             full_jtr = full_jtr.transpose(0, 1)
-            stable = stable.transpose(0, 1)
-            velocity_local = velocity_local.transpose(0, 1)
+            if not refine:
+                stable = stable.transpose(0, 1)
+                velocity_local = velocity_local.transpose(0, 1)
             root_ori = root_ori.transpose(0, 1)
         
         if args.cuda:
@@ -66,23 +67,25 @@ def train(train_loader, model, criterion, optimizer, epoch):
             nn_pose = nn_pose.cuda()
             leaf_jtr = leaf_jtr.cuda()
             full_jtr = full_jtr.cuda()
-            stable = stable.cuda()
-            velocity_local = velocity_local.cuda()
+            if not refine:
+                stable = stable.cuda()
+                velocity_local = velocity_local.cuda()
             root_ori = root_ori.cuda()
         if args.half:
             imu = imu.half()
             nn_pose = nn_pose.half()
             leaf_jtr = leaf_jtr.half()
             full_jtr = full_jtr.half()
-            stable = stable.half()
-            velocity_local = velocity_local.half()
+            if not refine:
+                stable = stable.half()
+                velocity_local = velocity_local.half()
             root_ori = root_ori.half()
 
 
         # compute output
-        output = model((imu, leaf_jtr, full_jtr))            
+        output = model.forward_my((imu, leaf_jtr, full_jtr), refine=refine)            
         target = (leaf_jtr, full_jtr, nn_pose, stable, velocity_local)
-        loss_dict, totalLoss = criterion(output, target)
+        loss_dict, totalLoss = criterion(output, target, refine)
 
         bar.set_description(
                 f"Train[{epoch}/{args.epochs}] lr={optimizer.param_groups[0]['lr']}")
@@ -105,11 +108,11 @@ def train(train_loader, model, criterion, optimizer, epoch):
         #               data_time=data_time, loss=losses))
     return losses
 
-def validate(val_loader, model, criterion):
+def validate(val_loader, model, criterion, refine=False):
     """
     Run evaluation
     """
-    losses = AverageMeter()
+    losses = AverageMeter(refine)
 
     # switch to evaluate mode
     model.eval()
@@ -121,8 +124,9 @@ def validate(val_loader, model, criterion):
             nn_pose = nn_pose.transpose(0, 1)
             leaf_jtr = leaf_jtr.transpose(0, 1)
             full_jtr = full_jtr.transpose(0, 1)
-            stable = stable.transpose(0, 1)
-            velocity_local = velocity_local.transpose(0, 1)
+            if not refine:
+                stable = stable.transpose(0, 1)
+                velocity_local = velocity_local.transpose(0, 1)
             root_ori = root_ori.transpose(0, 1)
         
         if args.cuda:
@@ -130,8 +134,9 @@ def validate(val_loader, model, criterion):
             nn_pose = nn_pose.cuda()
             leaf_jtr = leaf_jtr.cuda()
             full_jtr = full_jtr.cuda()
-            stable = stable.cuda()
-            velocity_local = velocity_local.cuda()
+            if not refine:
+                stable = stable.cuda()
+                velocity_local = velocity_local.cuda()
             root_ori = root_ori.cuda()
 
         if args.half:
@@ -139,15 +144,16 @@ def validate(val_loader, model, criterion):
             nn_pose = nn_pose.half()
             leaf_jtr = leaf_jtr.half()
             full_jtr = full_jtr.half()
-            stable = stable.half()
-            velocity_local = velocity_local.half()
+            if not refine:
+                stable = stable.half()
+                velocity_local = velocity_local.half()
             root_ori = root_ori.half()
 
         # compute output
         with torch.no_grad():
-            output = model((imu, leaf_jtr, full_jtr))
+            output = model.forward_my((imu, leaf_jtr, full_jtr), refine=refine)
             target = (leaf_jtr, full_jtr, nn_pose, stable, velocity_local)
-            loss_dict, totalLoss = criterion(output, target)
+            loss_dict, totalLoss = criterion(output, target, refine)
 
         bar.set_description("Val")
         bar.set_postfix(**{k:v for k,v in loss_dict.items()})
@@ -173,22 +179,27 @@ def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
 
 class AverageMeter(object):
     """Computes and stores the average and current value"""
-    def __init__(self):
-        self.reset()
+    def __init__(self, refine=False):
+        self.reset(refine)
 
-    def reset(self):
+    def reset(self, refine):
+
         self.sum =  {"poseS1":0, 
                 "poseS2": 0, 
-                "poseS3":0, 
-                "tranB1":0, 
-                "tranB2":0,
-                "contact_prob":0}
+                "poseS3":0}
         self.__avg =  {"poseS1":0, 
                 "poseS2": 0, 
-                "poseS3":0, 
-                "tranB1":0, 
-                "tranB2":0,
-                "contact_prob":0}
+                "poseS3":0}
+        
+        if not refine:
+            self.sum['tranB1'] = 0
+            self.sum['tranB2'] = 0
+            self.sum['contact_prob'] = 0
+
+            self.__avg['tranB1'] = 0
+            self.__avg['tranB2'] = 0
+            self.__avg['contact_prob'] = 0
+        
         self.count = 0
 
     def update(self, loss_dict):
@@ -236,7 +247,7 @@ def main():
         if os.path.isfile(args.resume):
             print("=> loading checkpoint '{}'".format(args.resume))
             checkpoint = torch.load(args.resume)
-            args.start_epoch = checkpoint['epoch'] if not args.fineturning else 0
+            args.start_epoch = checkpoint['epoch']
             model.load_state_dict(checkpoint['state_dict'])
             print("=> loaded checkpoint '{}' (epoch {})"
                   .format(args.evaluate, checkpoint['epoch']))
@@ -271,19 +282,21 @@ def main():
                                 weight_decay=args.weight_decay)
     
     if args.evaluate:
-        validate(val_loader, model, criterion)
+        validate(val_loader, model, criterion, args.fineturning)
         return
 
     for epoch in range(args.start_epoch, args.epochs):
-        adjust_learning_rate(optimizer, epoch)
-
+        if not args.fineturning:
+            adjust_learning_rate(optimizer, epoch)
+        else:
+            adjust_learning_rate(optimizer, epoch - args.start_epoch)
         # train for one epoch
-        train_loss = train(train_loader, model, criterion, optimizer, epoch)
+        train_loss = train(train_loader, model, criterion, optimizer, epoch, args.fineturning)
         for k, v in train_loss.avg().items():            
             viz.line([v], [epoch],win=k+' line', opts=dict(title="train:"+ k), update='append')
         
         # evaluate on validation set
-        validate_loss = validate(val_loader, model, criterion)
+        validate_loss = validate(val_loader, model, criterion, args.fineturning)
         for k, v in validate_loss.avg().items():
             viz.line([v], [epoch], win=k+'val line', opts=dict(title="val:"+ k), update='append')
 
