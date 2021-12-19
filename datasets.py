@@ -43,7 +43,7 @@ class OwnDatasets(Dataset):
         
         leaf_jtr = nn_jtr[:, joint_set.leaf]
         full_jtr = nn_jtr[:, joint_set.full]
-        
+
         return imu, nn_pose.flatten(1),leaf_jtr.flatten(1), full_jtr.flatten(1), stable, velocity_local, root_ori
 
     def __len__(self):

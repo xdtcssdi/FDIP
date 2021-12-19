@@ -10,7 +10,7 @@ from datasets import OwnDatasets
 from tqdm import tqdm
 from net import TransPoseNet
 from visdom import Visdom
-
+from einops import rearrange
 parser = argparse.ArgumentParser(description="This is a FDIP of %(prog)s", epilog="This is a epilog of %(prog)s", prefix_chars="-+", fromfile_prefix_chars="@", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument("-b", "--batch_size",metavar="批次数量", type=int, required=True)
 parser.add_argument("-m", "--model", choices=['RNN', 'TCN', 'GCN'], required=True, metavar="模型类型")
@@ -28,8 +28,8 @@ parser.add_argument('--lr', '--learning-rate', default=1e-3, type=float,
                     metavar='LR', help='initial learning rate')
 parser.add_argument('--weight-decay', '--wd', default=0, type=float,
                     metavar='W', help='weight decay (default: 5e-4)')
-parser.add_argument('--print-freq', '-p', default=20, type=int,
-                    metavar='N', help='print frequency (default: 20)')
+parser.add_argument('--save-freq', '-s', default=30, type=int,
+                    metavar='N', help='save sample frequency (default: 30)')
 parser.add_argument('--save-dir', dest='save_dir',
                     help='The directory used to save the trained models',
                     default='save_temp', type=str)
@@ -40,7 +40,7 @@ parser.add_argument('--epochs', default=300, type=int, metavar='N',
 parser.add_argument('--batch_first', action="store_false", help="isFirst")
 parser.add_argument('--visdom', action="store_true", help="visdom")
 
-def train(train_loader, model, criterion, optimizer, epoch, refine=False):
+def train(train_loader, model, criterion, optimizers, epoch, refine=False):
     """
         Run one train epoch
     """
@@ -51,7 +51,6 @@ def train(train_loader, model, criterion, optimizer, epoch, refine=False):
 
     bar = tqdm(enumerate(train_loader), total = len(train_loader))
     for i, (imu, nn_pose,leaf_jtr, full_jtr, stable, velocity_local, root_ori) in bar:
-
         if args.batch_first:
             imu = imu.transpose(0, 1)
             nn_pose = nn_pose.transpose(0, 1)
@@ -61,7 +60,7 @@ def train(train_loader, model, criterion, optimizer, epoch, refine=False):
                 stable = stable.transpose(0, 1)
                 velocity_local = velocity_local.transpose(0, 1)
             root_ori = root_ori.transpose(0, 1)
-        
+
         if args.cuda:
             imu = imu.cuda()
             nn_pose = nn_pose.cuda()
@@ -82,30 +81,29 @@ def train(train_loader, model, criterion, optimizer, epoch, refine=False):
             root_ori = root_ori.half()
 
 
-        # compute output
+        # compute outputn m
         output = model.forward_my((imu, leaf_jtr, full_jtr), refine=refine)            
         target = (leaf_jtr, full_jtr, nn_pose, stable, velocity_local)
-        loss_dict, totalLoss = criterion(output, target, refine)
+        loss_dict = criterion(output, target, refine)
 
         bar.set_description(
-                f"Train[{epoch}/{args.epochs}] lr={optimizer.param_groups[0]['lr']}")
-        bar.set_postfix(**{k:v for k,v in loss_dict.items()})
+                f"Train[{epoch}/{args.epochs}] lr={optimizers[0].param_groups[0]['lr']}")
+        bar.set_postfix(**{k:v.item() for k,v in loss_dict.items()})
         
         # compute gradient and do Adam step
-        optimizer.zero_grad()
-        totalLoss.backward()
-        optimizer.step()
+        [optimizer.zero_grad() for optimizer in optimizers]
+        [v.backward() for k, v in loss_dict.items() if k !="contact_prob"]
+        [optimizer.step() for optimizer in optimizers]
 
         losses.update(loss_dict)
 
         # measure elapsed time
-        # if i % args.print_freq == 0:
-        #     print('Epoch: [{0}][{1}/{2}]\t'
-        #           'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-        #           'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
-        #           'Loss {loss.val:.4f} ({loss.avg:.4f})'.format(
-        #               epoch, i, len(train_loader), batch_time=batch_time,
-        #               data_time=data_time, loss=losses))
+        if i % args.save_freq == 0:
+            batch_size = output[2].shape[0]
+            reduce_glb_pose = rearrange(output[2], "a b (c d) -> a b c d", c=15)
+            sample_idx = random.randint(0, batch_size)
+            pose = model._reduced_glb_6d_to_full_local_mat(root_ori[sample_idx, :].cpu(), reduce_glb_pose[sample_idx, :].cpu())
+            np.savez(f"sample/{epoch}_{i}", pose.detach().numpy())
     return losses
 
 def validate(val_loader, model, criterion, refine=False):
@@ -153,10 +151,10 @@ def validate(val_loader, model, criterion, refine=False):
         with torch.no_grad():
             output = model.forward_my((imu, leaf_jtr, full_jtr), refine=refine)
             target = (leaf_jtr, full_jtr, nn_pose, stable, velocity_local)
-            loss_dict, totalLoss = criterion(output, target, refine)
+            loss_dict = criterion(output, target, refine)
 
         bar.set_description("Val")
-        bar.set_postfix(**{k:v for k,v in loss_dict.items()})
+        bar.set_postfix(**{k:v.item() for k,v in loss_dict.items()})
 
         # measure accuracy and record loss
         losses.update(loss_dict)
@@ -204,7 +202,7 @@ class AverageMeter(object):
 
     def update(self, loss_dict):
         for k, v in loss_dict.items():
-            self.sum[k] += v
+            self.sum[k] += v.item()
         self.count += 1
 
     def avg(self):
@@ -212,11 +210,12 @@ class AverageMeter(object):
             self.__avg[k] = self.sum[k]/self.count
         return self.__avg
 
-def adjust_learning_rate(optimizer, epoch):
+def adjust_learning_rate(optimizers, epoch):
     """Sets the learning rate to the initial LR decayed by 2 every 30 epochs"""
-    lr = args.lr * (0.5 ** (epoch // 30))
-    for param_group in optimizer.param_groups:
-        param_group['lr'] = lr
+    for optimizer in optimizers:
+        lr = args.lr * (0.5 ** (epoch // 30))
+        for param_group in optimizer.param_groups:
+            param_group['lr'] = lr
 
 def setup_seed(seed):
      torch.manual_seed(seed)
@@ -224,6 +223,14 @@ def setup_seed(seed):
      np.random.seed(seed)
      random.seed(seed)
      torch.backends.cudnn.deterministic = True
+def plot_metric(viz, loss_dict, epoch, mode):
+    Y, label = [], []
+    for k, v in loss_dict.avg().items():     
+        if k =="contact_prob":continue
+        Y.append(v)
+        label.append(k)  
+    # Y = [(x - min(Y))/(max(Y) - min(Y)) for x in Y]
+    viz.line([Y], [epoch], win=mode, opts=dict(title=mode, legend=label), update='append')
 
 def main():
     setup_seed(20)
@@ -277,28 +284,36 @@ def main():
     if args.half:
         model.half()
         criterion.half()
-
-    optimizer = torch.optim.Adam(model.parameters(), args.lr,
-                                weight_decay=args.weight_decay)
     
+    optimizerPose1 = torch.optim.Adam(model.pose_s1.parameters(), args.lr,
+                                weight_decay=args.weight_decay)
+    optimizerPose2 = torch.optim.Adam(model.pose_s2.parameters(), args.lr,
+                                weight_decay=args.weight_decay)
+    optimizerPose3 = torch.optim.Adam(model.pose_s3.parameters(), args.lr,
+                                weight_decay=args.weight_decay)
+    optimizerTranB1 = torch.optim.Adam(model.tran_b1.parameters(), args.lr,
+                                weight_decay=args.weight_decay)
+    optimizerTranB2 = torch.optim.Adam(model.tran_b2.parameters(), args.lr,
+                                weight_decay=args.weight_decay)
+    optimizers = [optimizerPose1, optimizerPose2, optimizerPose3, optimizerTranB1, optimizerTranB2]
     if args.evaluate:
         validate(val_loader, model, criterion, args.fineturning)
         return
 
     for epoch in range(args.start_epoch, args.epochs):
-        if not args.fineturning:
-            adjust_learning_rate(optimizer, epoch)
-        else:
-            adjust_learning_rate(optimizer, epoch - args.start_epoch)
+        # if not args.fineturning:
+        #     adjust_learning_rate(optimizers, epoch)
+        # else:
+        #     adjust_learning_rate(optimizers, epoch - args.start_epoch)
         # train for one epoch
-        train_loss = train(train_loader, model, criterion, optimizer, epoch, args.fineturning)
-        for k, v in train_loss.avg().items():            
-            viz.line([v], [epoch],win=k+' line', opts=dict(title="train:"+ k), update='append')
+        train_loss = train(train_loader, model, criterion, optimizers, epoch, args.fineturning)
+        plot_metric(viz, train_loss, epoch, "train")
         
         # evaluate on validation set
         validate_loss = validate(val_loader, model, criterion, args.fineturning)
-        for k, v in validate_loss.avg().items():
-            viz.line([v], [epoch], win=k+'val line', opts=dict(title="val:"+ k), update='append')
+        plot_metric(viz, validate_loss, epoch, "valid")
+        if not args.fineturning:
+            viz.line([[train_loss.avg()['contact_prob'], validate_loss.avg()['contact_prob']]], [epoch], win='contact prob', opts=dict(title="contact prob", legend=['train', 'valid']), update='append')
 
         # remember best prec@1 and save checkpoint
         is_best = True

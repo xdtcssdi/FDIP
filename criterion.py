@@ -18,21 +18,23 @@ class MyLoss(torch.nn.Module):
         poseS2Loss = self.l2lLoss(full_joint_position, full_joint_position_gt)
         poseS3Loss = self.l2lLoss(global_reduced_pose, global_reduced_pose_gt)
 
-        loss_dict =  {"poseS1":poseS1Loss.item(), 
-                "poseS2": poseS2Loss.item(), 
-                "poseS3":poseS3Loss.item()}
+        loss_dict =  {"poseS1":poseS1Loss, 
+                "poseS2": poseS2Loss, 
+                "poseS3":poseS3Loss}
 
         if not refine:
             tranB1loss = self.transB1Loss(contact_probability.sigmoid(), contact_probability_gt)
             tranB2loss = self.transB2Loss(velocity, velocity_gt)
             contact_prob = foot_accuracy(contact_probability.sigmoid(), contact_probability_gt)
-            loss_dict['tranB1'] = tranB1loss.item()
-            loss_dict['tranB2'] = tranB2loss.item()
+            loss_dict['tranB1'] = tranB1loss / 10
+            loss_dict['tranB2'] = tranB2loss / 100
             loss_dict['contact_prob'] = contact_prob
-        if refine:
-            return loss_dict, poseS1Loss + poseS2Loss + poseS3Loss
-        else:
-            return loss_dict, poseS1Loss + poseS2Loss + poseS3Loss + tranB1loss + tranB2loss
+        
+        return loss_dict
+        # if refine:
+        #     return loss_dict, poseS1Loss + poseS2Loss + poseS3Loss
+        # else:
+        #     return loss_dict, poseS1Loss + poseS2Loss + poseS3Loss + tranB1loss + tranB2loss
         
     def transB1Loss(self, contact_prob: torch.Tensor, contact_prob_gt: torch.Tensor):
         contact_prob = torch.clamp(contact_prob,min=1e-4,max=1-1e-4) # 限制概率不会出现nan
@@ -110,4 +112,4 @@ def foot_accuracy(output: torch.Tensor, target: torch.Tensor):
     output = (output >= 0.5).int()
     target = target.int()
     _acc = ((output == target).sum(dim=-1) == 2).float()
-    return _acc.mean().item() * 100
+    return _acc.mean() * 100

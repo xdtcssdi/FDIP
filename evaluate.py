@@ -34,7 +34,7 @@ def evaluate_pose(dataset, num_past_frame=20, num_future_frame=5):
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     evaluator = PoseEvaluator()
     net = TransPoseNet(num_past_frame, num_future_frame).to(device)
-    checkpoint = torch.load("save_temp/checkpoint_fineturning_350.tar")
+    checkpoint = torch.load("save_temp/checkpoint_fineturning_152.tar")
     net.load_state_dict(checkpoint['state_dict'])
     data = torch.load(os.path.join(dataset, 'test.pt'))
     xs = [normalize_and_concat(a, r).unsqueeze(1).to(device) for a, r in zip(data['acc'], data['ori'])]

@@ -6,6 +6,7 @@ from glob import glob
 import numpy as np
 from tqdm import tqdm
 import articulate as art
+from main import train
 
 def get_ori_acc(poses_global_rotation, vertexs, frame_rate, n):
     """从全局旋转和全局顶点位置中计算虚拟IMU方向和加速度
@@ -78,8 +79,7 @@ def pre_process_amass():
 
             data = np.load(path) # ['poses', 'gender', 'mocap_framerate', 'betas', 'trans']
 
-            body_model = art.model.ParametricModel(paths.male_smpl_file \
-                if data['gender'] == 'male' else paths.female_smpl_file, device=device) # 根据性别选择模型
+            body_model = art.model.ParametricModel(paths.male_smpl_file, device=device) # 根据性别选择模型
             
             mocap_framerate = int(data['mocap_framerate'])
             mocap_framerate = 60 if mocap_framerate == 59 else mocap_framerate
@@ -108,6 +108,12 @@ def pre_process_amass():
             
     print('Preprocessed AMASS dataset is saved at', paths.amass_dir)
 
+def get_joint(model, pose_global):
+    pose_local = model.inverse_kinematics_R(pose_global)
+    pose_global, joint_global = model.forward_kinematics(pose_local)
+    return joint_global
+
+
 def del_dirty_data():
     """清理BioMotionLab_NTroje数据集中无用数据
 
@@ -135,15 +141,16 @@ def process_amass(seq_len = 300, train=True):
     train_split = ["BioMotionLab_NTroje", "BMLhandball", "BMLmovi", "CMU", "MPI_mosh", "DanceDB", "Eyes_Japan_Dataset", "MPI_HDM05", "KIT"]
     veri_split = ["ACCAD", "DFaust_67", "SFU", "EKUT", "HumanEva", "SSM_synced", "MPI_Limits"]
     accs_arr, oris_arr, poses_arr, trans_arr, jtr_arr = [], [], [], [], []
-    
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
     total_seq_len = 0
     for subject in tqdm(train_split if train else veri_split):
         for path in tqdm(glob(os.path.join(paths.amass_dir, subject, "**/*.npz"), recursive=True)):
             data = np.load(path)
-            pose_global = torch.from_numpy(data['pose_global'])
-            tran = torch.from_numpy(data['tran'])
-            joint_global = torch.from_numpy(data['joint_global'])
-            reduce_vertex_global = torch.from_numpy(data['reduce_vertex_global'])
+            pose_global = torch.from_numpy(data['pose_global']).to(device)
+            tran = torch.from_numpy(data['tran']).to(device)
+            # joint_global = torch.from_numpy(data['joint_global']).to(device)
+            reduce_vertex_global = torch.from_numpy(data['reduce_vertex_global']).to(device)
 
             # 提取15个姿态，并且转为6d旋转
             pose_mtx = torch.einsum("nij,nkjm->nkim", pose_global[:, 0].transpose(1, 2), pose_global)
@@ -155,23 +162,26 @@ def process_amass(seq_len = 300, train=True):
             
             pose_6d = pose_6d[n:-n]
             tran = tran[n:-n]
-            joint_global = joint_global[n:-n]
-            
+            body_model = art.model.ParametricModel(paths.male_smpl_file, device=device) # 根据性别选择模型
+
+            joint_global = get_joint(body_model, pose_mtx.clone().contiguous())
+            nn_jtr = joint_global - joint_global[:, :1]
+            # print(nn_jtr.shape)
             # 分割为batch
             pose_6ds = torch.split(pose_6d, seq_len)
             trans = torch.split(tran, seq_len)
-            joint_globals = torch.split(joint_global, seq_len)
+            joint_globals = torch.split(nn_jtr, seq_len)
             oris = torch.split(ori, seq_len)
             accs = torch.split(acc, seq_len)
 
             for p, t, j, ori, acc in zip(pose_6ds, trans, joint_globals, oris, accs):
                 if len(p) != seq_len: continue
                 total_seq_len += seq_len
-                accs_arr.append(acc.clone())
-                oris_arr.append(ori.clone())
-                poses_arr.append(p.clone())
-                trans_arr.append(t.clone())
-                jtr_arr.append(j.clone())
+                accs_arr.append(acc.to("cpu").clone())
+                oris_arr.append(ori.to("cpu").clone())
+                poses_arr.append(p.to("cpu").clone())
+                trans_arr.append(t.to("cpu").clone())
+                jtr_arr.append(j.to("cpu").clone())
                 
     os.makedirs(paths.amass_dir, exist_ok=True)
     # np.savez(os.path.join(paths.amass_dir, 'train' if train else "veri"), **{'acc': accs_arr, 'ori': oris_arr, 'pose': poses_arr, 'tran': trans_arr, 'jp':jtr_arr})
@@ -242,38 +252,43 @@ def process_dip(seq_len = 300, train=True):
     train_split = ['s_01', 's_02', 's_03', 's_04', 's_05', 's_06', 's_07', 's_08']
     test_split = ['s_09', 's_10']
     accs_arr, oris_arr, poses_arr, trans_arr, jtr_arr = [], [], [], [], []
-    
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
     total_seq_len = 0
     for subject in tqdm(train_split if train else test_split):
         for path in tqdm(glob(os.path.join(paths.dipimu_dir, subject, "**/*.npz"), recursive=True)):
-            print(path)
+            # print(path)
             data = np.load(path)
-            pose_global = torch.from_numpy(data['pose_global'])
-            joint_global = torch.from_numpy(data['joint_global'])
+            pose_global = torch.from_numpy(data['pose_global']).to(device)
+            # joint_global = torch.from_numpy(data['joint_global']).to(device)
 
             # 提取15个姿态，并且转为6d旋转
             pose_mtx = torch.einsum("nij,nkjm->nkim", pose_global[:, 0].transpose(1, 2), pose_global)
             pose_6d = art.math.rotation_matrix_to_r6d(pose_mtx).reshape(-1, 24, 6)[:, joint_set.reduced]
 
-            ori = torch.from_numpy(data['ori'])[:, :6]
-            acc = torch.from_numpy(data['acc'])[:, :6]
+            ori = torch.from_numpy(data['ori'])[:, :6].to(device)
+            acc = torch.from_numpy(data['acc'])[:, :6].to(device)
 
             # print(pose_6d.shape, joint_global.shape, ori.shape, acc.shape)
+            body_model = art.model.ParametricModel(paths.male_smpl_file, device=device) # 根据性别选择模型
+
+            joint_global = get_joint(body_model, pose_mtx.clone().contiguous())
+            nn_jtr = joint_global - joint_global[:, :1]
 
             # 分割为batch
             pose_6ds = torch.split(pose_6d, seq_len)
-            joint_globals = torch.split(joint_global, seq_len)
+            joint_globals = torch.split(nn_jtr, seq_len)
             oris = torch.split(ori, seq_len)
             accs = torch.split(acc, seq_len)
 
             for p, j, ori, acc in zip(pose_6ds, joint_globals, oris, accs):
                 if len(p) != seq_len: continue
                 total_seq_len += seq_len
-                accs_arr.append(acc.clone())
-                oris_arr.append(ori.clone())
-                poses_arr.append(p.clone())
+                accs_arr.append(acc.to("cpu").clone())
+                oris_arr.append(ori.to("cpu").clone())
+                poses_arr.append(p.to("cpu").clone())
                 trans_arr.append(None)
-                jtr_arr.append(j.clone())
+                jtr_arr.append(j.to("cpu").clone())
                 
     os.makedirs(paths.dipimu_dir, exist_ok=True)
     # np.savez(os.path.join(paths.dipimu_dir, 'train' if train else "veri"), **{'acc': accs_arr, 'ori': oris_arr, 'pose': poses_arr, 'tran': trans_arr, 'jp':jtr_arr})
@@ -380,4 +395,6 @@ if __name__ == '__main__':
     # pre_process_dipimu_train()
 
     # process_dip(train=False)
-    process_dipimu_test()
+    # process_dipimu_test()
+    # process_amass(train=False)
+    process_dip(train=False)

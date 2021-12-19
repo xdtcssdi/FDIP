@@ -10,7 +10,7 @@ class RNN(torch.nn.Module):
     """
     def __init__(self, n_input, n_output, n_hidden, n_rnn_layer=2, bidirectional=True, dropout=0.2):
         super(RNN, self).__init__()
-        self.rnn = torch.nn.LSTM(n_hidden, n_hidden, n_rnn_layer, bidirectional=bidirectional)
+        self.rnn = torch.nn.LSTM(n_hidden, n_hidden, n_rnn_layer, bidirectional=bidirectional, batch_first=True)
         self.linear1 = torch.nn.Linear(n_input, n_hidden)
         self.linear2 = torch.nn.Linear(n_hidden * (2 if bidirectional else 1), n_output)
         self.dropout = torch.nn.Dropout(dropout)
@@ -112,26 +112,21 @@ class TransPoseNet(torch.nn.Module):
         return leaf_joint_position, full_joint_position, global_reduced_pose, contact_probability, velocity, rnn_state
     
     def forward_my(self, input, rnn_state=None, refine=False):
-        imu, leaf_jtr, full_jtr =  input
-        if not refine:
-            imu += torch.normal(mean=imu, std=0.04).to(imu.device)
+        imu, leaf_jtr, full_jtr = input
+
+        # if not refine:
+        #     imu += torch.normal(mean=imu, std=0.04).to(imu.device)
         leaf_joint_position = self.pose_s1.forward(imu)[0]
-        if not refine:
-            leaf_joint_position_gt_addG = leaf_jtr + torch.normal(mean=0, std=0.04, size= leaf_jtr.shape).to(imu.device)
-        else:
-            leaf_joint_position_gt_addG = leaf_jtr
+        leaf_joint_position_gt_addG = leaf_jtr
         full_joint_position = self.pose_s2.forward(torch.cat((leaf_joint_position_gt_addG, imu), dim=-1))[0]
-        if not refine:
-            full_joint_position_gt_addG = full_jtr + torch.normal(mean=0, std=0.025, size=full_jtr.shape).to(imu.device)
-        else:
-            full_joint_position_gt_addG = full_jtr
+        full_joint_position_gt_addG = full_jtr
         global_reduced_pose = self.pose_s3.forward(torch.cat((full_joint_position_gt_addG, imu), dim=-1))[0]
         
         if not refine:
             x1 = torch.cat((leaf_jtr, imu), dim=-1)
-            x1 += torch.normal(mean=x1, std=0.04).to(imu.device)
+            # x1 += torch.normal(mean=x1, std=0.04).to(imu.device)
             x2 = torch.cat((full_jtr, imu), dim=-1)
-            x2 += torch.normal(mean=x2, std=0.025).to(imu.device)
+            # x2 += torch.normal(mean=x2, std=0.025).to(imu.device)
 
             contact_probability = self.tran_b1.forward(x1)[0]
             velocity, rnn_state = self.tran_b2.forward(x2, rnn_state)
@@ -139,6 +134,35 @@ class TransPoseNet(torch.nn.Module):
             contact_probability = None
             velocity = None
         return leaf_joint_position, full_joint_position, global_reduced_pose, contact_probability, velocity, rnn_state
+
+    # def forward_my(self, input, rnn_state=None, refine=False):
+    #     imu, leaf_jtr, full_jtr =  input
+    #     # if not refine:
+    #     #     imu += torch.normal(mean=imu, std=0.04).to(imu.device)
+    #     leaf_joint_position = self.pose_s1.forward(imu)[0]
+    #     if not refine:
+    #         leaf_joint_position_gt_addG = leaf_jtr + torch.normal(mean=0, std=0.04, size= leaf_jtr.shape).to(imu.device)
+    #     else:
+    #         leaf_joint_position_gt_addG = leaf_jtr
+    #     full_joint_position = self.pose_s2.forward(torch.cat((leaf_joint_position_gt_addG, imu), dim=-1))[0]
+    #     if not refine:
+    #         full_joint_position_gt_addG = full_jtr + torch.normal(mean=0, std=0.025, size=full_jtr.shape).to(imu.device)
+    #     else:
+    #         full_joint_position_gt_addG = full_jtr
+    #     global_reduced_pose = self.pose_s3.forward(torch.cat((full_joint_position_gt_addG, imu), dim=-1))[0]
+        
+    #     if not refine:
+    #         x1 = torch.cat((leaf_jtr, imu), dim=-1)
+    #         x1 += torch.normal(mean=x1, std=0.04).to(imu.device)
+    #         x2 = torch.cat((full_jtr, imu), dim=-1)
+    #         x2 += torch.normal(mean=x2, std=0.025).to(imu.device)
+
+    #         contact_probability = self.tran_b1.forward(x1)[0]
+    #         velocity, rnn_state = self.tran_b2.forward(x2, rnn_state)
+    #     else:
+    #         contact_probability = None
+    #         velocity = None
+    #     return leaf_joint_position, full_joint_position, global_reduced_pose, contact_probability, velocity, rnn_state
 
     @torch.no_grad()
     def forward_offline(self, imu):
@@ -230,21 +254,3 @@ class TransPoseNet(torch.nn.Module):
         :return: Translation tensor in shape [num_frame, 3] for root positions.
         """
         return torch.stack([velocity[:i+1].sum(dim=0) for i in range(velocity.shape[0])])
-
-
-class Trainer(TransPoseNet):
-    def __init__(self, num_past_frame=20, num_future_frame=5, hip_length=None, upper_leg_length=None,
-                 lower_leg_length=None, prob_threshold=(0.5, 0.9), gravity_velocity=-0.018):
-        r"""
-        :param num_past_frame: Number of past frames for a biRNN window.
-        :param num_future_frame: Number of future frames for a biRNN window.
-        :param hip_length: Hip length in meters. SMPL mean length is used by default. Float or tuple of 2.
-        :param upper_leg_length: Upper leg length in meters. SMPL mean length is used by default. Float or tuple of 2.
-        :param lower_leg_length: Lower leg length in meters. SMPL mean length is used by default. Float or tuple of 2.
-        :param prob_threshold: The probability threshold used to control the fusion of the two translation branches.
-        :param gravity_velocity: The gravity velocity added to the Trans-B1 when the body is not on the ground.
-        """
-        super().__init__(num_past_frame=20, num_future_frame=5, hip_length=None, upper_leg_length=None,
-                 lower_leg_length=None, prob_threshold=(0.5, 0.9), gravity_velocity=-0.018)
-        
-    
