@@ -16,3 +16,4 @@ data/weights.pt
 __pycache__/
 
 save_temp/
+sample/
