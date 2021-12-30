@@ -1,6 +1,6 @@
 import torch
 import numpy as np
-from net import TransPoseNet
+from net import TransPoseNet1Stage
 from config import paths
 from utils import normalize_and_concat
 import os
@@ -19,8 +19,8 @@ def get_dip_acc_ori():
     return torch.from_numpy(data['acc'][:, :6]), torch.from_numpy(data['ori'][:, :6])
 
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-net = TransPoseNet().to(device)
-checkpoint = torch.load("save_temp/checkpoint_pretrain_50.tar")
+net = TransPoseNet1Stage().to(device)
+checkpoint = torch.load("save_temp/checkpoint_pretrain_140.tar")
 net.load_state_dict(checkpoint['state_dict'])
 
 acc, ori = get_amass_acc_ori()
@@ -30,7 +30,7 @@ x = normalize_and_concat(acc, ori).to(device)
 x = x.unsqueeze(0)
 print(x.shape)
 pose, tran = net.forward_offline(x)     # offline
-tran = torch.zeros_like(tran)
+# tran = torch.zeros_like(tran)
 # pose, tran = [torch.stack(_) for _ in zip(*[net.forward_online(f) for f in x])]   # online
-art.ParametricModel(paths.male_smpl_file).view_motion([pose], [tran])
+art.ParametricModel(paths.male_smpl_file, device=device).view_motion([pose], [tran])
 

@@ -8,8 +8,10 @@ from config import paths
 from criterion import MyLoss3Stage
 from datasets import OwnDatasets
 from tqdm import tqdm
-from net import TransPoseNet3Stage
+from net import TransPoseNet3Stage, TransPoseNet
 from visdom import Visdom
+from einops import rearrange
+
 
 parser = argparse.ArgumentParser(description="This is a FDIP of %(prog)s", epilog="This is a epilog of %(prog)s", prefix_chars="-+", fromfile_prefix_chars="@", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument("-b", "--batch_size",metavar="批次数量", type=int, required=True)
@@ -78,19 +80,20 @@ def train(train_loader, model, criterion, optimizers, epoch, refine=False):
                 velocity_local = velocity_local.half()
             root_ori = root_ori.half()
 
-        # compute gradient and do Adam step
         [optimizer.zero_grad() for optimizer in optimizers]
-        
-        # compute outputn m
-        output = model.forward_my((imu, leaf_jtr, full_jtr), refine=refine)            
-        target = (leaf_jtr, full_jtr, nn_pose, stable, velocity_local)
-        loss_dict, _ = criterion(output, target, refine)
 
+        # compute outputn m
+        leaf_joint_position, full_joint_position, global_reduced_pose, contact_probability, velocity, rnn_state = model(imu, leaf_jtr, full_jtr)
+
+        loss_dict, loss = criterion((leaf_joint_position, full_joint_position, global_reduced_pose, contact_probability, velocity, rnn_state), 
+                            (leaf_jtr, full_jtr, nn_pose, stable, velocity_local), refine)
+            
         bar.set_description(
                 f"Train[{epoch}/{args.epochs}] lr={optimizers[0].param_groups[0]['lr']}")
         bar.set_postfix(**{k:v.item() for k,v in loss_dict.items()})
         
-        [v.backward() for k, v in loss_dict.items() if k !="contact_prob"]
+        # compute gradient and do Adam step
+        loss.backward()
         [optimizer.step() for optimizer in optimizers]
 
         losses.update(loss_dict)
@@ -146,7 +149,7 @@ def validate(val_loader, model, criterion, refine=False):
 
         # compute output
         with torch.no_grad():
-            output = model.forward_my((imu, leaf_jtr, full_jtr), refine=refine)
+            output = model(imu, leaf_jtr, full_jtr)
             target = (leaf_jtr, full_jtr, nn_pose, stable, velocity_local)
             loss_dict, _ = criterion(output, target, refine)
 
@@ -155,14 +158,6 @@ def validate(val_loader, model, criterion, refine=False):
 
         # measure accuracy and record loss
         losses.update(loss_dict)
-
-        # measure elapsed time
-
-        # if i % args.print_freq == 0:
-        #     print('Test: [{0}/{1}]\t'
-        #           'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-        #           'Loss {loss.val:.4f} ({loss.avg:.4f})'.format(
-        #               i, len(val_loader), batch_time=batch_time, loss=losses))
 
     return losses
 
@@ -244,7 +239,7 @@ def main():
         os.makedirs(args.save_dir)
 
     device = torch.device("cuda:0") if args.cuda else torch.device("cpu")
-    model = TransPoseNet3Stage().to(device)
+    model = TransPoseNet().to(device)
 
     # optionally resume from a checkpoint
     if args.resume:
@@ -259,12 +254,12 @@ def main():
             print("=> no checkpoint found at '{}'".format(args.resume))
     
     cudnn.benchmark = True
-
-    train_dataset = OwnDatasets(os.path.join(paths.amass_dir if not args.fineturning else paths.dipimu_dir, "train.pt"))
-    val_dataset = OwnDatasets(os.path.join(paths.amass_dir if not args.fineturning else paths.dipimu_dir, "veri.pt"))
+    use_joint=[0, 1, 2, 3, 4, 5]
+    train_dataset = OwnDatasets(os.path.join(paths.amass_dir if not args.fineturning else paths.dipimu_dir, "train.pt"), use_joint, isMatrix=True)
+    val_dataset = OwnDatasets(os.path.join(paths.amass_dir if not args.fineturning else paths.dipimu_dir, "veri.pt"), use_joint, isMatrix=True)
     
     train_loader = torch.utils.data.DataLoader(train_dataset,
-        batch_size=args.batch_size, shuffle=True,
+        batch_size=args.batch_size, shuffle=False,
         num_workers=args.workers, pin_memory=True)
 
     val_loader = torch.utils.data.DataLoader(val_dataset,
@@ -282,17 +277,10 @@ def main():
         model.half()
         criterion.half()
     
-    optimizerPose1 = torch.optim.Adam(model.pose_s1.parameters(), args.lr,
+    optimizerPose1 = torch.optim.Adam(model.parameters(), args.lr,
                                 weight_decay=args.weight_decay)
-    optimizerPose2 = torch.optim.Adam(model.pose_s2.parameters(), args.lr,
-                                weight_decay=args.weight_decay)
-    optimizerPose3 = torch.optim.Adam(model.pose_s3.parameters(), args.lr,
-                                weight_decay=args.weight_decay)
-    optimizerTranB1 = torch.optim.Adam(model.tran_b1.parameters(), args.lr,
-                                weight_decay=args.weight_decay)
-    optimizerTranB2 = torch.optim.Adam(model.tran_b2.parameters(), args.lr,
-                                weight_decay=args.weight_decay)
-    optimizers = [optimizerPose1, optimizerPose2, optimizerPose3, optimizerTranB1, optimizerTranB2]
+    
+    optimizers = [optimizerPose1]
     # if args.evaluate:
     #     validate(val_loader, model, criterion, args.fineturning)
     #     return

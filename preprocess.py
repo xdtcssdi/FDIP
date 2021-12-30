@@ -6,7 +6,6 @@ from glob import glob
 import numpy as np
 from tqdm import tqdm
 import articulate as art
-from main import train
 
 def get_ori_acc(poses_global_rotation, vertexs, frame_rate, n):
     """从全局旋转和全局顶点位置中计算虚拟IMU方向和加速度
@@ -131,7 +130,7 @@ def del_dirty_data():
     for file in files:
         os.remove(file)
     
-def process_amass(seq_len = 300, train=True):
+def process_amass(seq_len = 200, train=True):
     """从预处理的amass数据中分割数据集，并且保存9个加速度、9个旋转、15个6d姿态、位移和全局关节位置
 
     Args:
@@ -185,7 +184,7 @@ def process_amass(seq_len = 300, train=True):
                 
     os.makedirs(paths.amass_dir, exist_ok=True)
     # np.savez(os.path.join(paths.amass_dir, 'train' if train else "veri"), **{'acc': accs_arr, 'ori': oris_arr, 'pose': poses_arr, 'tran': trans_arr, 'jp':jtr_arr})
-    torch.save({'acc': accs_arr, 'ori': oris_arr, 'pose': poses_arr, 'tran': trans_arr, 'jp':jtr_arr}, os.path.join(paths.amass_dir, 'train.pt' if train else "veri.pt"))
+    torch.save({'acc': accs_arr, 'ori': oris_arr, 'pose': poses_arr, 'tran': trans_arr, 'jp':jtr_arr}, os.path.join(paths.amass_dir, f'train{seq_len}.pt' if train else f"veri{seq_len}.pt"))
     print(total_seq_len // 3600, " Minutes")
 
 
@@ -266,8 +265,8 @@ def process_dip(seq_len = 300, train=True):
             pose_mtx = torch.einsum("nij,nkjm->nkim", pose_global[:, 0].transpose(1, 2), pose_global)
             pose_6d = art.math.rotation_matrix_to_r6d(pose_mtx).reshape(-1, 24, 6)[:, joint_set.reduced]
 
-            ori = torch.from_numpy(data['ori'])[:, :6].to(device)
-            acc = torch.from_numpy(data['acc'])[:, :6].to(device)
+            ori = torch.from_numpy(data['ori']).to(device)
+            acc = torch.from_numpy(data['acc']).to(device)
 
             # print(pose_6d.shape, joint_global.shape, ori.shape, acc.shape)
             body_model = art.model.ParametricModel(paths.male_smpl_file, device=device) # 根据性别选择模型
@@ -392,9 +391,9 @@ if __name__ == '__main__':
     # process_dipimu()
     # process_totalcapture()
     # process_dip()
-    # pre_process_dipimu_train()
+    # process_dip()
 
     # process_dip(train=False)
     # process_dipimu_test()
-    # process_amass(train=False)
-    process_dip(train=False)
+    # process_amass(seq_len=120, train=False)
+    process_dip(train=True)

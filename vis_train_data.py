@@ -24,8 +24,17 @@ def vis_train():
 
 def vis_sample():
     device = torch.device("cuda:0")
-    data = np.load("sample/104_0.npz")
+    data = np.load("sample/163_30.npz")
     pose = torch.from_numpy(data['arr_0']).to(device)
+    tran = torch.zeros((len(pose), 3)).to(device)
+    body_model = art.model.ParametricModel(paths.male_smpl_file, device=device) # 根据性别选择模型
+
+    body_model.view_motion([pose], [tran])
+
+def vis_sample2():
+    device = torch.device("cuda:0")
+    data = np.load("sample/sample_valid_data_3150.pkl", allow_pickle=True)
+    pose = torch.from_numpy(data['poses']).to(device)
     tran = torch.zeros((len(pose), 3)).to(device)
     body_model = art.model.ParametricModel(paths.male_smpl_file, device=device) # 根据性别选择模型
 

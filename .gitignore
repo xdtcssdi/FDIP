@@ -15,5 +15,6 @@ data/dataset_work/TotalCapture/*
 data/weights.pt
 __pycache__/
 
-save_temp/
+save_temp*
 sample/
+结果/
