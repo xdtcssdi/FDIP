@@ -292,7 +292,7 @@ def main():
     #     return
 
     for epoch in range(args.start_epoch, args.epochs):
-        adjust_learning_rate(optimizers, epoch)
+        # adjust_learning_rate(optimizers, epoch)
         # train for one epoch
         train_loss = train(train_loader, model, criterion, optimizers, epoch, args.fineturning)
         plot_metric(viz, train_loss, epoch, "train")

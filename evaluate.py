@@ -33,7 +33,7 @@ class PoseEvaluator:
 def evaluate_pose(dataset, num_past_frame=20, num_future_frame=5):
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     evaluator = PoseEvaluator()
-    net = TransPoseNet3Stage(num_past_frame, num_future_frame).to(device)
+    net = TransPoseNet1Stage(num_past_frame, num_future_frame).to(device)
     net.eval()
     checkpoint = torch.load(sys.argv[1])
     net.load_state_dict(checkpoint['state_dict'])

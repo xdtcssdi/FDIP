@@ -376,7 +376,6 @@ class TransPoseNet3Stage(torch.nn.Module):
         return torch.stack([velocity[:i+1].sum(dim=0) for i in range(velocity.shape[0])])
 
 
-
 class TransPoseNet1Stage(torch.nn.Module):
     r"""
     Whole pipeline for pose and translation estimation.
@@ -395,8 +394,8 @@ class TransPoseNet1Stage(torch.nn.Module):
         super().__init__()
         n_imu = 6 * 3 + 6 * 9   # acceleration (vector3) and rotation matrix (matrix3x3) of 6 IMUs
         self.pose_net = RNN(n_imu,                         joint_set.n_reduced * 6,       256)
-        self.tran_b1 = RNN(joint_set.n_leaf * 3 + n_imu,  2,                          64)
-        self.tran_b2 = RNN(joint_set.n_full * 3 + n_imu,  3,                          256,    bidirectional=False)
+        # self.tran_b1 = RNN(joint_set.n_leaf * 3 + n_imu,  2,                          64)
+        # self.tran_b2 = RNN(joint_set.n_full * 3 + n_imu,  3,                          256,    bidirectional=False)
 
         # lower body joint
         self.m = art.ParametricModel(paths.male_smpl_file, device=torch.device("cuda:0"))
