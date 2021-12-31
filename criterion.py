@@ -96,7 +96,19 @@ class MyLoss1Stage(torch.nn.Module):
         result = _TransB2Loss(output, target, 1) + _TransB2Loss(output, target, 3) + _TransB2Loss(
             output, target, 9) + _TransB2Loss(output, target, 27)
         return result
+    
+
+class MyAttLoss1Stage(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.l2lLoss = torch.nn.MSELoss()
+
+    def forward(self, global_reduced_pose, global_reduced_pose_gt, refine):
+        poseLoss = self.l2lLoss(global_reduced_pose, global_reduced_pose_gt)
+        loss_dict =  {"pose":poseLoss}
         
+        return loss_dict
+   
 # body_model = art.ParametricModel(paths.smpl_file, device=device)
 l2lLoss = torch.nn.MSELoss()
 bceLoss = torch.nn.BCELoss()
@@ -115,32 +127,32 @@ def TransB1Loss(contact_prob: torch.Tensor, contact_prob_gt: torch.Tensor):
     #term = - contact_prob_gt * torch.log(contact_prob) - (1 - contact_prob_gt) * torch.log(1 - contact_prob)
     return loss
 
-def _reduced_glb_6d_to_full_local_mat(root_rotation, glb_reduced_pose):
-    glb_reduced_pose = art.math.r6d_to_rotation_matrix(glb_reduced_pose).view(-1, joint_set.n_reduced, 3, 3)
-    global_full_pose = torch.eye(3, device=glb_reduced_pose.device).repeat(glb_reduced_pose.shape[0], 24, 1, 1)
-    global_full_pose[:,joint_set.reduced] = glb_reduced_pose
-    pose = global2local(global_full_pose).view(-1, 24, 3, 3)
-    pose[:, joint_set.ignored] = torch.eye(3, device=pose.device)
-    pose[:, 0] = root_rotation.reshape(-1, 3, 3)
-    return pose
+# def _reduced_glb_6d_to_full_local_mat(root_rotation, glb_reduced_pose):
+#     glb_reduced_pose = art.math.r6d_to_rotation_matrix(glb_reduced_pose).view(-1, joint_set.n_reduced, 3, 3)
+#     global_full_pose = torch.eye(3, device=glb_reduced_pose.device).repeat(glb_reduced_pose.shape[0], 24, 1, 1)
+#     global_full_pose[:,joint_set.reduced] = glb_reduced_pose
+#     pose = global2local(global_full_pose).view(-1, 24, 3, 3)
+#     pose[:, joint_set.ignored] = torch.eye(3, device=pose.device)
+#     pose[:, 0] = root_rotation.reshape(-1, 3, 3)
+#     return pose
     
-def JointLoss(r6d:torch.Tensor, joint_gt:torch.Tensor, root_rotation:torch.Tensor):
-    """[summary]
+# def JointLoss(r6d:torch.Tensor, joint_gt:torch.Tensor, root_rotation:torch.Tensor):
+#     """[summary]
 
-    Args:
-        r6d (torch.Tensor): [seq, batch_size, 15 *6]
-        joint_gt ([type]): [seq, batch_size, 23, 3]
-    """
-    # print(r6d.shape, joint_gt.shape, root_rotation.shape)
-    seq, batch_size, d = r6d.shape
-    full_pose = _reduced_glb_6d_to_full_local_mat(root_rotation, r6d).view(seq * batch_size, 24, 3, 3)
+#     Args:
+#         r6d (torch.Tensor): [seq, batch_size, 15 *6]
+#         joint_gt ([type]): [seq, batch_size, 23, 3]
+#     """
+#     # print(r6d.shape, joint_gt.shape, root_rotation.shape)
+#     seq, batch_size, d = r6d.shape
+#     full_pose = _reduced_glb_6d_to_full_local_mat(root_rotation, r6d).view(seq * batch_size, 24, 3, 3)
     
-    _, joint_global = body_model.forward_kinematics(full_pose)
+#     _, joint_global = body_model.forward_kinematics(full_pose)
 
-    joint_norm = joint_global - joint_global[:, :1]
-    joint_norm = joint_norm[:, config.joint_set.full].view(seq, batch_size, 69)
+#     joint_norm = joint_global - joint_global[:, :1]
+#     joint_norm = joint_norm[:, config.joint_set.full].view(seq, batch_size, 69)
 
-    return l2lLoss(joint_norm, joint_gt)
+#     return l2lLoss(joint_norm, joint_gt)
 
 def _TransB2Loss(output: torch.Tensor, target: torch.Tensor, n: int):
     arr = torch.split(output - target, n, dim=0)

@@ -12,7 +12,7 @@ from config import paths
 from criterion import MyLoss1Stage
 from datasets import OwnDatasets
 from tqdm import tqdm
-from net import TransPoseNet1Stage
+from net import TransPoseNet1StageSRU
 from visdom import Visdom
 from einops import rearrange
 
@@ -85,6 +85,7 @@ def train(train_loader, model, criterion, optimizers, epoch, refine=False):
 
 
         # compute outputn m
+        print(imu.shape)
         output = model.forward_my((imu, leaf_jtr, full_jtr), refine=refine)            
         target = (nn_pose, stable, velocity_local)
         loss_dict = criterion(output, target, refine)
@@ -245,7 +246,7 @@ def main():
         os.makedirs(args.save_dir)
 
     device = torch.device("cuda:0") if args.cuda else torch.device("cpu")
-    model = TransPoseNet1Stage().to(device)
+    model = TransPoseNet1StageSRU(isMatrix=False).to(device)
 
     # optionally resume from a checkpoint
     if args.resume:
@@ -261,8 +262,8 @@ def main():
     
     cudnn.benchmark = True
 
-    train_dataset = OwnDatasets(os.path.join(paths.amass_dir if not args.fineturning else paths.dipimu_dir, "train.pt"))
-    val_dataset = OwnDatasets(os.path.join(paths.amass_dir if not args.fineturning else paths.dipimu_dir, "veri.pt"))
+    train_dataset = OwnDatasets(os.path.join(paths.amass_dir if not args.fineturning else paths.dipimu_dir, "train.pt"), isMatrix=False)
+    val_dataset = OwnDatasets(os.path.join(paths.amass_dir if not args.fineturning else paths.dipimu_dir, "veri.pt"), isMatrix=False)
     
     train_loader = torch.utils.data.DataLoader(train_dataset,
         batch_size=args.batch_size, shuffle=True,

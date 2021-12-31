@@ -4,7 +4,7 @@ r"""
 
 import torch
 import tqdm
-from net import TransPoseNet3Stage, TransPoseNet1Stage, TransPoseNet
+from net import TransPoseNet3Stage, TransPoseNet1Stage, TransPoseNet, AttTransPoseNet1Stage, TemporalModel, TransAm, TransPoseNet1StageSRU
 from config import *
 import os
 import articulate as art
@@ -33,7 +33,8 @@ class PoseEvaluator:
 def evaluate_pose(dataset, num_past_frame=20, num_future_frame=5):
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     evaluator = PoseEvaluator()
-    net = TransPoseNet1Stage(num_past_frame, num_future_frame).to(device)
+    num_joints_in, in_features, num_joints_out = 6, (3+9), 15
+    net = TransPoseNet1StageSRU().to(device)
     net.eval()
     checkpoint = torch.load(sys.argv[1])
     net.load_state_dict(checkpoint['state_dict'])
@@ -42,11 +43,12 @@ def evaluate_pose(dataset, num_past_frame=20, num_future_frame=5):
     ys = [(art.math.axis_angle_to_rotation_matrix(p).view(-1, 24, 3, 3).unsqueeze(1).to(device), t) for p, t in zip(data['pose'], data['tran'])]
     offline_errs, online_errs = [], []
     for x, y in tqdm.tqdm(list(zip(xs, ys))):
-        net.reset()
+        # net.reset()
         # online_results = [net.forward_online(f) for f in torch.cat((x, x[-1].repeat(num_future_frame, 1, 1)))]
         # pose_p_online, tran_p_online = [torch.stack(_)[num_future_frame:] for _ in zip(*online_results)]
         pose_p_offline, tran_p_offline = net.forward_offline(x)
         pose_t, tran_t = y
+        # pose_t = pose_t[13:-13]
         offline_errs.append(evaluator.eval(pose_p_offline, pose_t))
         # online_errs.append(evaluator.eval(pose_p_online, pose_t))
         # break

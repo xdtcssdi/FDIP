@@ -12,7 +12,7 @@ from config import paths
 from criterion import MyLoss1Stage
 from datasets import OwnDatasets
 from tqdm import tqdm
-from net import TransPoseNet1Stage
+from net import TransPoseNet1StageSRU
 from visdom import Visdom
 from einops import rearrange
 
@@ -245,7 +245,7 @@ def main():
         os.makedirs(args.save_dir)
 
     device = torch.device("cuda:0") if args.cuda else torch.device("cpu")
-    model = TransPoseNet1Stage().to(device)
+    model = TransPoseNet1StageSRU().to(device)
 
     # optionally resume from a checkpoint
     if args.resume:

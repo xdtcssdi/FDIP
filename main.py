@@ -1,3 +1,6 @@
+"""
+三阶段预测,原始TransPose训练
+"""
 import argparse
 import os
 import numpy as np

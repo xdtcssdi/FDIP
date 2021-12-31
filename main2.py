@@ -1,3 +1,6 @@
+"""
+Transformer Endocer 
+"""
 import argparse
 import os
 import numpy as np
@@ -5,13 +8,12 @@ import random
 import torch
 import torch.backends.cudnn as cudnn
 from config import paths
-from criterion import MyLoss3Stage
+from criterion import MyAttLoss1Stage
 from datasets import OwnDatasets
 from tqdm import tqdm
-from net import TransPoseNet3Stage, TransPoseNet
+from net import TransAm
 from visdom import Visdom
 from einops import rearrange
-
 
 parser = argparse.ArgumentParser(description="This is a FDIP of %(prog)s", epilog="This is a epilog of %(prog)s", prefix_chars="-+", fromfile_prefix_chars="@", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument("-b", "--batch_size",metavar="批次数量", type=int, required=True)
@@ -80,20 +82,21 @@ def train(train_loader, model, criterion, optimizers, epoch, refine=False):
                 velocity_local = velocity_local.half()
             root_ori = root_ori.half()
 
-        [optimizer.zero_grad() for optimizer in optimizers]
 
         # compute outputn m
-        leaf_joint_position, full_joint_position, global_reduced_pose, contact_probability, velocity, rnn_state = model(imu, leaf_jtr, full_jtr)
+        if not refine:
+            imu += torch.normal(mean=imu, std=0.04).to(imu.device)
 
-        loss_dict, loss = criterion((leaf_joint_position, full_joint_position, global_reduced_pose, contact_probability, velocity, rnn_state), 
-                            (leaf_jtr, full_jtr, nn_pose, stable, velocity_local), refine)
-            
+        output = model(imu, nn_pose)
+        loss_dict = criterion(output, nn_pose, refine)
+
         bar.set_description(
                 f"Train[{epoch}/{args.epochs}] lr={optimizers[0].param_groups[0]['lr']}")
         bar.set_postfix(**{k:v.item() for k,v in loss_dict.items()})
         
         # compute gradient and do Adam step
-        loss.backward()
+        [optimizer.zero_grad() for optimizer in optimizers]
+        [v.backward() for k, v in loss_dict.items() if k !="contact_prob"]
         [optimizer.step() for optimizer in optimizers]
 
         losses.update(loss_dict)
@@ -149,15 +152,25 @@ def validate(val_loader, model, criterion, refine=False):
 
         # compute output
         with torch.no_grad():
-            output = model(imu, leaf_jtr, full_jtr)
-            target = (leaf_jtr, full_jtr, nn_pose, stable, velocity_local)
-            loss_dict, _ = criterion(output, target, refine)
+            if not refine:
+                imu += torch.normal(mean=imu, std=0.04).to(imu.device)
+
+            output = model(imu, nn_pose)
+            loss_dict = criterion(output, nn_pose, refine)
 
         bar.set_description("Val")
         bar.set_postfix(**{k:v.item() for k,v in loss_dict.items()})
 
         # measure accuracy and record loss
         losses.update(loss_dict)
+
+        # measure elapsed time
+
+        # if i % args.print_freq == 0:
+        #     print('Test: [{0}/{1}]\t'
+        #           'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+        #           'Loss {loss.val:.4f} ({loss.avg:.4f})'.format(
+        #               i, len(val_loader), batch_time=batch_time, loss=losses))
 
     return losses
 
@@ -174,21 +187,17 @@ class AverageMeter(object):
 
     def reset(self, refine):
 
-        self.sum =  {"poseS1":0, 
-                "poseS2": 0, 
-                "poseS3":0}
-        self.__avg =  {"poseS1":0, 
-                "poseS2": 0, 
-                "poseS3":0}
+        self.sum =  {"pose":0}
+        self.__avg =  {"pose":0}
         
-        if not refine:
-            self.sum['tranB1'] = 0
-            self.sum['tranB2'] = 0
-            self.sum['contact_prob'] = 0
+        # if not refine:
+        #     self.sum['tranB1'] = 0
+        #     self.sum['tranB2'] = 0
+        #     self.sum['contact_prob'] = 0
 
-            self.__avg['tranB1'] = 0
-            self.__avg['tranB2'] = 0
-            self.__avg['contact_prob'] = 0
+        #     self.__avg['tranB1'] = 0
+        #     self.__avg['tranB2'] = 0
+        #     self.__avg['contact_prob'] = 0
         
         self.count = 0
 
@@ -205,7 +214,7 @@ class AverageMeter(object):
 def adjust_learning_rate(optimizers, epoch):
     """Sets the learning rate to the initial LR decayed by 2 every 30 epochs"""
     for optimizer in optimizers:
-        lr = args.lr * (0.5 ** (epoch // 30))
+        lr = args.lr * (0.8 ** (epoch // 100))
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
 
@@ -239,7 +248,7 @@ def main():
         os.makedirs(args.save_dir)
 
     device = torch.device("cuda:0") if args.cuda else torch.device("cpu")
-    model = TransPoseNet().to(device)
+    model = TransAm().to(device)
 
     # optionally resume from a checkpoint
     if args.resume:
@@ -254,20 +263,20 @@ def main():
             print("=> no checkpoint found at '{}'".format(args.resume))
     
     cudnn.benchmark = True
-    use_joint=[0, 1, 2, 3, 4, 5]
-    train_dataset = OwnDatasets(os.path.join(paths.amass_dir if not args.fineturning else paths.dipimu_dir, "train.pt"), use_joint, isMatrix=True)
-    val_dataset = OwnDatasets(os.path.join(paths.amass_dir if not args.fineturning else paths.dipimu_dir, "veri.pt"), use_joint, isMatrix=True)
+
+    train_dataset = OwnDatasets(os.path.join(paths.amass_dir if not args.fineturning else paths.dipimu_dir, "train.pt"))
+    val_dataset = OwnDatasets(os.path.join(paths.amass_dir if not args.fineturning else paths.dipimu_dir, "veri.pt"))
     
     train_loader = torch.utils.data.DataLoader(train_dataset,
-        batch_size=args.batch_size, shuffle=False,
+        batch_size=args.batch_size, shuffle=True,
         num_workers=args.workers, pin_memory=True)
 
     val_loader = torch.utils.data.DataLoader(val_dataset,
         batch_size=args.batch_size, shuffle=False,
         num_workers=args.workers, pin_memory=True)
     print(f"训练集{len(train_loader)}, 验证集{len(val_loader)}")
-    # 
-    criterion = MyLoss3Stage()
+    
+    criterion = MyAttLoss1Stage()
     if args.cuda:
         criterion = criterion.cuda()
     else:
@@ -279,17 +288,18 @@ def main():
     
     optimizerPose1 = torch.optim.Adam(model.parameters(), args.lr,
                                 weight_decay=args.weight_decay)
-    
+   
+    # optimizerTranB1 = torch.optim.Adam(model.tran_b1.parameters(), args.lr,
+    #                             weight_decay=args.weight_decay)
+    # optimizerTranB2 = torch.optim.Adam(model.tran_b2.parameters(), args.lr,
+    #                             weight_decay=args.weight_decay)
     optimizers = [optimizerPose1]
     # if args.evaluate:
     #     validate(val_loader, model, criterion, args.fineturning)
     #     return
 
     for epoch in range(args.start_epoch, args.epochs):
-        # if not args.fineturning:
-        #     adjust_learning_rate(optimizers, epoch)
-        # else:
-        #     adjust_learning_rate(optimizers, epoch - args.start_epoch)
+        # adjust_learning_rate(optimizers, epoch)
         # train for one epoch
         train_loss = train(train_loader, model, criterion, optimizers, epoch, args.fineturning)
         plot_metric(viz, train_loss, epoch, "train")
@@ -297,8 +307,8 @@ def main():
         # evaluate on validation set
         validate_loss = validate(val_loader, model, criterion, args.fineturning)
         plot_metric(viz, validate_loss, epoch, "valid")
-        if not args.fineturning:
-            viz.line([[train_loss.avg()['contact_prob'], validate_loss.avg()['contact_prob']]], [epoch], win='contact prob', opts=dict(title="contact prob", legend=['train', 'valid']), update='append')
+        # if not args.fineturning:
+        #     viz.line([[train_loss.avg()['contact_prob'], validate_loss.avg()['contact_prob']]], [epoch], win='contact prob', opts=dict(title="contact prob", legend=['train', 'valid']), update='append')
 
         # remember best prec@1 and save checkpoint
         is_best = True
