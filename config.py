@@ -1,6 +1,8 @@
 r"""
     Config for paths, joint set, and normalizing scales.
 """
+amass_data = ['ACCAD', 'BioMotionLab_NTroje', 'BMLhandball', 'BMLmovi', 'CMU', 'DanceDB', 'DFaust_67',
+            'Eyes_Japan_Dataset', 'HumanEva', 'MPI_HDM05', 'MPI_Limits', 'MPI_mosh', 'SFU', 'SSM_synced']
 
 
 class paths:

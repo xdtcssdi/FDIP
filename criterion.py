@@ -58,16 +58,55 @@ class MyLoss3Stage(torch.nn.Module):
             output, target, 9) + _TransB2Loss(output, target, 27)
         return result
 
-class MyLoss1Stage(torch.nn.Module):
+class MyLoss1StageTrans(torch.nn.Module):
     def __init__(self):
         super().__init__()
-        self.l2lLoss = torch.nn.MSELoss()
+        self.l2lLoss = torch.nn.SmoothL1Loss()
 
     def forward(self, x, y, refine):
         global_reduced_pose, contact_probability, velocity, _ = x
         global_reduced_pose_gt, contact_probability_gt, velocity_gt = y
 
-        poseLoss = self.l2lLoss(global_reduced_pose.transpose(0, 1), global_reduced_pose_gt.transpose(0, 1))
+        poseLoss = self.l2lLoss(global_reduced_pose, global_reduced_pose_gt)
+
+        loss_dict =  {"pose":poseLoss}
+
+        if not refine:
+            tranB1loss = self.transB1Loss(contact_probability, contact_probability_gt)
+        #     tranB2loss = self.transB2Loss(velocity.transpose(0, 1), velocity_gt.transpose(0, 1))
+            contact_prob = foot_accuracy(contact_probability, contact_probability_gt)
+            loss_dict['tranB1'] = tranB1loss / 10
+        #     loss_dict['tranB2'] = tranB2loss / 100
+            loss_dict['contact_prob'] = contact_prob
+        
+        return loss_dict
+       
+    def transB1Loss(self, contact_prob: torch.Tensor, contact_prob_gt: torch.Tensor):
+        contact_prob = torch.clamp(contact_prob,min=1e-4,max=1-1e-4) # 限制概率不会出现nan
+        bceLoss = torch.nn.BCELoss()
+        loss = bceLoss(contact_prob, contact_prob_gt)
+        return loss
+
+    def transB2Loss(self, output: torch.Tensor, target: torch.Tensor):
+        def _TransB2Loss(output: torch.Tensor, target: torch.Tensor, n: int):
+            arr = torch.split(output - target, n, dim=0)
+            diff_sum = torch.stack([torch.norm(item, p=2, dim=-1).sum(dim=0) for item in arr]).mean()
+            return diff_sum
+
+        result = _TransB2Loss(output, target, 1) + _TransB2Loss(output, target, 3) + _TransB2Loss(
+            output, target, 9) + _TransB2Loss(output, target, 27)
+        return result
+
+class MyLoss1Stage(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.l2lLoss = torch.nn.SmoothL1Loss()
+
+    def forward(self, x, y, refine):
+        global_reduced_pose, contact_probability, velocity, _ = x
+        global_reduced_pose_gt, contact_probability_gt, velocity_gt = y
+
+        poseLoss = self.l2lLoss(global_reduced_pose, global_reduced_pose_gt)
 
         loss_dict =  {"pose":poseLoss}
 

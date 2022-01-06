@@ -1,5 +1,6 @@
 from torch.utils.data import DataLoader, Dataset
 import torch
+import articulate
 from config import paths, joint_set
 import config
 from utils import normalize_and_concat
@@ -51,7 +52,7 @@ import os
 
 
 class OwnDatasets(Dataset):
-    def __init__(self, filepath, use_joint=[0, 1, 2, 3, 4, 5], isMatrix=True):
+    def __init__(self, filepath, use_joint=[0, 1, 2, 3, 4, 5], isMatrix=True, no_norm=False, onlyori=False):
         super(OwnDatasets, self).__init__()
         data = torch.load(filepath)
         self.use_joint = use_joint
@@ -61,6 +62,12 @@ class OwnDatasets(Dataset):
         self.acc = data['acc']
         self.point = data['jp']
         self.isMatrix = isMatrix
+        self.no_norm = no_norm
+        self.onlyori = onlyori
+
+        self.m = articulate.ParametricModel(paths.male_smpl_file)
+        self.global_to_local_pose = self.m.inverse_kinematics_R
+
 
     def __getitem__(self, idx):
         nn_pose = self.pose[idx].float()
@@ -70,7 +77,7 @@ class OwnDatasets(Dataset):
         acc = self.acc[idx][:, self.use_joint].float()
         joint_pos = self.point[idx].float()
         root_ori = ori[:, -1] # 最后一组为胯部
-        imu = normalize_and_concat(acc, ori, len(self.use_joint), self.isMatrix)
+        imu = normalize_and_concat(acc, ori, len(self.use_joint), self.isMatrix, self.no_norm, onlyori=self.onlyori )
 
         # 世界速度->本地速度
         if self.tran[idx] is not None:
@@ -85,8 +92,13 @@ class OwnDatasets(Dataset):
         stable = (diff[:, [7, 8]].norm(dim=2) < stable_threshold).float()
 
         # 关节位置
-        nn_jtr = joint_pos - joint_pos[:, :1]
+        # nn_jtr = joint_pos - joint_pos[:, :1]
         
+        # leaf_jtr = nn_jtr[:, joint_set.leaf]
+        # full_jtr = nn_jtr[:, joint_set.full]
+        full_pose = self._reduced_glb_6d_to_full_local_mat(root_ori, nn_pose)
+        pose_global, joint_global = self.m.forward_kinematics(full_pose)
+        nn_jtr = joint_global - joint_global[:, :1]
         leaf_jtr = nn_jtr[:, joint_set.leaf]
         full_jtr = nn_jtr[:, joint_set.full]
 
@@ -94,6 +106,15 @@ class OwnDatasets(Dataset):
 
     def __len__(self):
         return len(self.ori)
+
+    def _reduced_glb_6d_to_full_local_mat(self, root_rotation, glb_reduced_pose):
+        glb_reduced_pose = articulate.math.r6d_to_rotation_matrix(glb_reduced_pose).view(-1, joint_set.n_reduced, 3, 3)
+        global_full_pose = torch.eye(3, device=glb_reduced_pose.device).repeat(glb_reduced_pose.shape[0], 24, 1, 1)
+        global_full_pose[:, joint_set.reduced] = glb_reduced_pose
+        pose = self.global_to_local_pose(global_full_pose).view(-1, 24, 3, 3)
+        pose[:, joint_set.ignored] = torch.eye(3, device=pose.device)
+        pose[:, 0] = root_rotation.view(-1, 3, 3)
+        return pose
 
 if __name__ == "__main__":
     dataset = OwnDatasets(os.path.join(paths.dipimu_dir, "veri.pt"))

@@ -19,3 +19,12 @@ save_temp*
 sample/
 结果/
 attention/
+trash*
+img/gt
+img/merge
+img/our
+img/offline
+img/gt
+img/online
+img/best_img
+data/dip.npz

@@ -1,5 +1,6 @@
 """
-从6个节点旋转矩阵预测15个节点,只需要一个网络
+从6个节点旋转加速度矩阵预测15个节点,只需要一个网络（舍弃根节点加速度旋转）
+SRU
 """
 
 import argparse
@@ -12,7 +13,7 @@ from config import paths
 from criterion import MyLoss1Stage
 from datasets import OwnDatasets
 from tqdm import tqdm
-from net import TransPoseNet1StageSRU
+from net import TransPoseNet1Stage
 from visdom import Visdom
 from einops import rearrange
 
@@ -245,7 +246,7 @@ def main():
         os.makedirs(args.save_dir)
 
     device = torch.device("cuda:0") if args.cuda else torch.device("cpu")
-    model = TransPoseNet1StageSRU().to(device)
+    model = TransPoseNet1Stage(isMatrix=False, num_joint=6).to(device)
 
     # optionally resume from a checkpoint
     if args.resume:
@@ -261,8 +262,8 @@ def main():
     
     cudnn.benchmark = True
 
-    train_dataset = OwnDatasets(os.path.join(paths.amass_dir if not args.fineturning else paths.dipimu_dir, "train.pt"))
-    val_dataset = OwnDatasets(os.path.join(paths.amass_dir if not args.fineturning else paths.dipimu_dir, "veri.pt"))
+    train_dataset = OwnDatasets(os.path.join(paths.amass_dir if not args.fineturning else paths.dipimu_dir, "train.pt"), isMatrix=False)
+    val_dataset = OwnDatasets(os.path.join(paths.amass_dir if not args.fineturning else paths.dipimu_dir, "veri.pt"), isMatrix=False)
     
     train_loader = torch.utils.data.DataLoader(train_dataset,
         batch_size=args.batch_size, shuffle=True,
@@ -309,10 +310,11 @@ def main():
 
         # remember best prec@1 and save checkpoint
         is_best = True
-        save_checkpoint({
-            'epoch': epoch + 1,
-            'state_dict': model.state_dict(),
-        }, is_best, filename=os.path.join(args.save_dir, 'checkpoint_{}_{}.tar'.format("fineturning" if args.fineturning else "pretrain", epoch)))
+        if epoch % 10 == 0 :
+            save_checkpoint({
+                'epoch': epoch + 1,
+                'state_dict': model.state_dict(),
+            }, is_best, filename=os.path.join(args.save_dir, 'checkpoint_{}_{}.tar'.format("fineturning" if args.fineturning else "pretrain", epoch)))
 
 
 if __name__ == '__main__':

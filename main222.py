@@ -1,5 +1,5 @@
 """
-从6个节点旋转矩阵(6d)预测15个节点,只需要一个网络,5层SRU
+从6个节点旋转矩阵预测15个节点,只需要一个网络,5层SRU
 """
 
 import argparse
@@ -9,10 +9,10 @@ import random
 import torch
 import torch.backends.cudnn as cudnn
 from config import paths
-from criterion import MyLoss1Stage, MyLoss1StageTrans
+from criterion import MyLoss1Stage
 from datasets import OwnDatasets
 from tqdm import tqdm
-from net import TransPoseNet1StageSRU
+from net import TransPoseNet1StageSRU2
 from visdom import Visdom
 from einops import rearrange
 
@@ -187,14 +187,14 @@ class AverageMeter(object):
         self.sum =  {"pose":0}
         self.__avg =  {"pose":0}
         
-        if not refine:
-            self.sum['tranB1'] = 0
-            # self.sum['tranB2'] = 0
-            self.sum['contact_prob'] = 0
+        # if not refine:
+        #     self.sum['tranB1'] = 0
+        #     self.sum['tranB2'] = 0
+        #     self.sum['contact_prob'] = 0
 
-            self.__avg['tranB1'] = 0
-            # self.__avg['tranB2'] = 0
-            self.__avg['contact_prob'] = 0
+        #     self.__avg['tranB1'] = 0
+        #     self.__avg['tranB2'] = 0
+        #     self.__avg['contact_prob'] = 0
         
         self.count = 0
 
@@ -245,7 +245,7 @@ def main():
         os.makedirs(args.save_dir)
 
     device = torch.device("cuda:0") if args.cuda else torch.device("cpu")
-    model = TransPoseNet1StageSRU(isMatrix=False).to(device)
+    model = TransPoseNet1StageSRU2(isMatrix=False).to(device)
 
     # optionally resume from a checkpoint
     if args.resume:
@@ -273,7 +273,7 @@ def main():
         num_workers=args.workers, pin_memory=True)
     print(f"训练集{len(train_loader)}, 验证集{len(val_loader)}")
     # 
-    criterion = MyLoss1StageTrans()
+    criterion = MyLoss1Stage()
     if args.cuda:
         criterion = criterion.cuda()
     else:
@@ -285,12 +285,12 @@ def main():
     
     optimizerPose1 = torch.optim.Adam(model.pose_net.parameters(), args.lr,
                                 weight_decay=args.weight_decay)
-    model.pose_net.eval()
-    optimizerTranB1 = torch.optim.Adam(model.tran_b1.parameters(), args.lr,
-                                weight_decay=args.weight_decay)
+   
+    # optimizerTranB1 = torch.optim.Adam(model.tran_b1.parameters(), args.lr,
+    #                             weight_decay=args.weight_decay)
     # optimizerTranB2 = torch.optim.Adam(model.tran_b2.parameters(), args.lr,
     #                             weight_decay=args.weight_decay)
-    optimizers = [optimizerTranB1]
+    optimizers = [optimizerPose1]
     # if args.evaluate:
     #     validate(val_loader, model, criterion, args.fineturning)
     #     return
@@ -304,8 +304,8 @@ def main():
         # evaluate on validation set
         validate_loss = validate(val_loader, model, criterion, args.fineturning)
         plot_metric(viz, validate_loss, epoch, "valid")
-        if not args.fineturning:
-            viz.line([[train_loss.avg()['contact_prob'], validate_loss.avg()['contact_prob']]], [epoch], win='contact prob', opts=dict(title="contact prob", legend=['train', 'valid']), update='append')
+        # if not args.fineturning:
+        #     viz.line([[train_loss.avg()['contact_prob'], validate_loss.avg()['contact_prob']]], [epoch], win='contact prob', opts=dict(title="contact prob", legend=['train', 'valid']), update='append')
 
         # remember best prec@1 and save checkpoint
         is_best = True

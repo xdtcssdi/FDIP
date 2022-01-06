@@ -16,7 +16,7 @@ manhattan_distance = lambda x, y: np.abs(x - y)
 
 np.set_printoptions(threshold = np.inf) 
 
-plt.figure(figsize=(10, 10))
+plt.figure(figsize=(10, 5))
 imu_mask = [7, 8, 11, 12, 0, 2]
 SMPL_IDX = [18, 19, 4, 5, 15, 0]
 VERTEX_IDX =[1962, 5431, 1096, 4583, 412, 3021]
@@ -67,21 +67,23 @@ def testOri():
         sub3.set_title("global pose %s"%(SMPL_SENSOR[i]))
         
         for ch in range(3):
-            num = imu[list(range(length)), i, ch].numpy()
+            num = imu[list(range(500, length)), i, ch].numpy()
             left= num.mean()-3*num.std()
             right= num.mean()+3*num.std()
             new_num = num[(left<num)&(num<right)]
             sub1.plot(range(len(new_num)), new_num)
+            sub1.legend(('x', 'y', 'z'), loc='upper right')  
             # num = pose_local_reduce[list(range(length)), i, ch].numpy()
             # left= num.mean()-3*num.std()
             # right= num.mean()+3*num.std()
             # new_num = num[(left<num)&(num<right)]
             # sub2.plot(range(len(new_num)), new_num)
-            num = global_pose_reduce[list(range(length)), i, ch].numpy()
+            num = global_pose_reduce[list(range(500, length)), i, ch].numpy()
             left= num.mean()-3*num.std()
             right= num.mean()+3*num.std()
             new_num = num[(left<num)&(num<right)]
             sub3.plot(range(len(new_num)), new_num)
+            sub3.legend(('x', 'y', 'z'), loc='upper right')  
 
     plt.savefig("img/dip_ori对比图.png")
 import scipy.stats
@@ -136,23 +138,47 @@ def testAcc(n):
     # print("cal acc", cal_acc.shape)
     # print(n, torch.sum(torch.abs(imu_acc - cal_acc)))
     # cal_error_acc(imu_acc[:length], cal_acc[:length])
-    for i in range(6):
-        sub1 = plt.subplot(6, 2, i*2+1)
-        sub2 = plt.subplot(6, 2, i*2+2)
+    # for i in range(6):
+    #     sub1 = plt.subplot(6, 2, i*2+1)
+    #     sub2 = plt.subplot(6, 2, i*2+2)
 
-        sub1.set_title("imu acc %s"%(SMPL_SENSOR[i]))
-        sub2.set_title("cal acc %s"%(SMPL_SENSOR[i]))
-        for ch in range(3):
-            num = imu_acc[list(range(length)), i, ch].numpy()
-            left= num.mean()-3*num.std()
-            right= num.mean()+3*num.std()
-            new_num = num[(left<num)&(num<right)]
-            sub1.plot(range(len(new_num)), new_num)
-            num = cal_acc[list(range(length)), i, ch].numpy()
-            left= num.mean()-3*num.std()
-            right= num.mean()+3*num.std()
-            new_num = num[(left<num)&(num<right)]
-            sub2.plot(range(len(new_num)), new_num)
+    #     sub1.set_title("imu acc %s"%(SMPL_SENSOR[i]))
+    #     sub2.set_title("cal acc %s"%(SMPL_SENSOR[i]))
+    #     for ch in range(3):
+    #         num = imu_acc[list(range(500, length)), i, ch].numpy()
+    #         left= num.mean()-3*num.std()
+    #         right= num.mean()+3*num.std()
+    #         new_num = num[(left<num)&(num<right)]
+    #         sub1.plot(range(len(new_num)), new_num)
+    #         sub1.legend(('x', 'y', 'z'), loc='upper right')  
+
+    #         num = cal_acc[list(range(500,length)), i, ch].numpy()
+    #         left= num.mean()-3*num.std()
+    #         right= num.mean()+3*num.std()
+    #         new_num = num[(left<num)&(num<right)]
+    #         sub2.plot(range(len(new_num)), new_num)
+    #         sub2.legend(('x', 'y', 'z'), loc='upper right')  
+
+    
+    sub1 = plt.subplot(1, 2, 1)
+    sub2 = plt.subplot(1, 2, 2)
+    i = 1
+    sub1.set_title("imu acc %s"%(SMPL_SENSOR[i]))
+    sub2.set_title("cal acc %s"%(SMPL_SENSOR[i]))
+    for ch in range(3):
+        num = imu_acc[list(range(500, length)), i, ch].numpy()
+        left= num.mean()-3*num.std()
+        right= num.mean()+3*num.std()
+        new_num = num[(left<num)&(num<right)]
+        sub1.plot(range(len(new_num)), new_num)
+        sub1.legend(('x', 'y', 'z'), loc='upper right')  
+
+        num = cal_acc[list(range(500,length)), i, ch].numpy()
+        left= num.mean()-3*num.std()
+        right= num.mean()+3*num.std()
+        new_num = num[(left<num)&(num<right)]
+        sub2.plot(range(len(new_num)), new_num)
+        sub2.legend(('x', 'y', 'z'), loc='upper right')  
 
     plt.savefig(f"img/dip_acc对比图n={n}")
 
@@ -213,9 +239,82 @@ def cal_min_acc_n():
     plt.plot(range(1, len(od)+1), od)
     plt.savefig("img/不同跨度加速度误差")
 
+
+
+def acc_dis_n_n(n, thresholds):
+    imu_acc = torch.FloatTensor(data['imu_acc'][:, imu_mask])
+    frames2del = np.unique(np.where(np.isnan(imu_acc) == True)[0])
+    imu_acc = np.delete(imu_acc, frames2del, 0)
+    gt = np.delete(data['gt'], frames2del, 0)
+    
+     # 本地
+    pose_local = torch.from_numpy(gt).view(-1, 24, 3).float()
+    # 全局
+    vertexs = art.ParametricModel(paths.male_smpl_file).forward_kinematics(art.math.axis_angle_to_rotation_matrix(pose_local).view(-1, 24, 3, 3), calc_mesh=True)[-1]
+    vertexs = vertexs[:, VERTEX_IDX].numpy()
+    cal_acc = []
+    time_interval = 1.0 / 60
+    # n = 4 # 3 -0.0146
+    for idx in range(n, len(vertexs) - n):
+        vertex_0 = vertexs[idx - n]  # 6 * 3
+        vertex_1 = vertexs[idx]
+        vertex_2 = vertexs[idx + n]
+        # 1 加速度合成
+        accel_tmp = (vertex_2 + vertex_0 - 2 * vertex_1) / \
+            (n * n * time_interval * time_interval)
+        cal_acc.append(accel_tmp)
+
+    cal_acc = torch.FloatTensor(cal_acc)
+
+    plt.subplots_adjust(wspace =1, hspace =0.5)
+    plt.subplots_adjust(wspace =1, hspace =0.5)
+    imu_acc = imu_acc[n:-n]
+    # cal_acc = cal_acc[70-n*2:-n*2]
+    imu_acc = imu_acc[70:]
+    cal_acc = cal_acc[70:]
+
+    all_error = imu_acc.sum(dim=[1, 2]) - cal_acc.sum(dim=[1, 2])
+    length = len(all_error)
+    res = []
+    for threshold in thresholds:
+        res.append(int((all_error<threshold).int().sum()) / length)
+    return res
 #testContact()
 # testOri()
 
 # 欧氏距离
 # cal_min_acc_n()
-testAcc(3)
+def draw_percentage_correct_acc():
+    plt.figure(figsize=(5, 5))
+    plt.grid(alpha=0.3)
+    thresholds = np.arange(0, 10, 0.2)
+    n = [1, 3, 4]
+    for i in n:
+        pers = acc_dis_n_n(i, thresholds)
+        plt.plot(thresholds, pers, label = 'n = '+ str(i), alpha=1)
+    plt.title('Percentage of Correct Accelerations')
+    plt.xlabel('Error threshold(m/s2)')
+    plt.ylabel('Percentage')
+    plt.yticks(np.arange(0.7,1, 0.1))
+    plt.legend()
+    plt.savefig("img/error_dis.png")
+
+def draw_Error_Distribution():
+    plt.figure(figsize=(5, 5))
+    plt.grid(alpha=0.3)
+    thresholds = np.arange(0, 10, 0.2)
+    colors = ['dodgerblue', 'orange', 'red']
+    n = [1, 4, 3]
+    for i in range(len(n)):
+        pers = acc_dis_n_n(n[i], thresholds)
+        pers = [1- a for a in pers]
+        plt.bar(thresholds, pers, edgecolor='k', alpha=0.7, label="n = "+str(n[i]), color=[colors[i]], width=0.2)
+    plt.title('Error Distribution')
+    plt.xlabel('Acceleration error (m/s2)')
+    plt.ylabel('Density')
+    plt.yticks(np.arange(0, 0.6, 0.1))
+    plt.legend()
+    plt.savefig("img/error_Distribution.png")
+
+draw_Error_Distribution()
+# draw_percentage_correct_acc()

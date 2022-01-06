@@ -8,13 +8,30 @@ from sru import SRU, SRUCell
 import numpy as np
 from scipy import signal
 
+from utils import PoseFilter
+
+# class RNN(torch.nn.Module):
+#     r"""
+#     An RNN Module including a linear input layer, an RNN, and a linear output layer.
+#     """
+#     def __init__(self, n_input, n_output, n_hidden, n_rnn_layer=2, bidirectional=True, dropout=0.2):
+#         super(RNN, self).__init__()
+#         self.rnn = torch.nn.LSTM(n_hidden, n_hidden, n_rnn_layer, bidirectional=bidirectional)
+#         self.linear1 = torch.nn.Linear(n_input, n_hidden)
+#         self.linear2 = torch.nn.Linear(n_hidden * (2 if bidirectional else 1), n_output)
+#         self.dropout = torch.nn.Dropout(dropout)
+
+#     def forward(self, x, h=None):
+#         x, h = self.rnn(relu(self.linear1(self.dropout(x))), h)
+#         return self.linear2(x), h
+
 class RNN(torch.nn.Module):
     r"""
     An RNN Module including a linear input layer, an RNN, and a linear output layer.
     """
     def __init__(self, n_input, n_output, n_hidden, n_rnn_layer=2, bidirectional=True, dropout=0.2):
         super(RNN, self).__init__()
-        self.rnn = torch.nn.LSTM(n_hidden, n_hidden, n_rnn_layer, bidirectional=bidirectional, dropout=dropout)
+        self.rnn = torch.nn.LSTM(n_hidden, n_hidden, n_rnn_layer, bidirectional=bidirectional)
         self.linear1 = torch.nn.Linear(n_input, n_hidden)
         self.linear2 = torch.nn.Linear(n_hidden * (2 if bidirectional else 1), n_output)
         self.dropout = torch.nn.Dropout(dropout)
@@ -29,13 +46,13 @@ class RNN_SRU(torch.nn.Module):
     """
     def __init__(self, n_input, n_output, n_hidden, n_rnn_layer=5, bidirectional=True, dropout=0.2):
         super(RNN_SRU, self).__init__()
-        self.rnn = SRU(n_hidden, n_hidden, n_rnn_layer, bidirectional=bidirectional, dropout=dropout, layer_norm=True)
+        self.rnn = SRU(n_hidden, n_hidden, n_rnn_layer, bidirectional=bidirectional, layer_norm=True, dropout=dropout)
         self.linear1 = torch.nn.Linear(n_input, n_hidden)
         self.linear2 = torch.nn.Linear(n_hidden * (2 if bidirectional else 1), n_output)
         self.dropout = torch.nn.Dropout(dropout)
 
     def forward(self, x, h=None):
-        x, h = self.rnn(relu(self.linear1(x)), h)
+        x, h = self.rnn(self.dropout(relu(self.linear1(x))), h)
         return self.linear2(x), h
 
 
@@ -85,7 +102,7 @@ class TransPoseNet(torch.nn.Module):
         self.num_future_frame = num_future_frame
         self.num_total_frame = num_past_frame + num_future_frame + 1
         self.prob_threshold = prob_threshold
-        self.gravity_velocity = torch.tensor([0, gravity_velocity, 0])
+        self.gravity_velocity = torch.tensor([0, gravity_velocity, 0]).to(device)
         self.feet_pos = j[10:12].clone()
         self.floor_y = j[10:12, 1].min().item()
 
@@ -119,7 +136,7 @@ class TransPoseNet(torch.nn.Module):
         self.imu = None
         self.current_root_y = 0
         self.last_lfoot_pos, self.last_rfoot_pos = self.feet_pos
-        self.last_root_pos = torch.zeros(3)
+        self.last_root_pos = torch.zeros(3).cuda()
 
     def forward(self, imu, leaf_joint_position_gt, full_joint_position_gt, rnn_state=None):
         leaf_joint_position = self.pose_s1.forward(imu)[0]
@@ -130,35 +147,153 @@ class TransPoseNet(torch.nn.Module):
         contact_probability, velocity = None, None
         return leaf_joint_position, full_joint_position, global_reduced_pose, contact_probability, velocity, rnn_state
         # return None, None, global_reduced_pose
-    def predict(self, imu):
+    def predict(self, imu, rnn_state=None):
         leaf_joint_position = self.pose_s1.forward(imu)[0]
         full_joint_position = self.pose_s2.forward(torch.cat((leaf_joint_position, imu), dim=-1))[0]
         global_reduced_pose = self.pose_s3.forward(torch.cat((full_joint_position, imu), dim=-1))[0]
-        # contact_probability = self.tran_b1.forward(torch.cat((leaf_joint_position, imu), dim=-1))[0]
-        # velocity, rnn_state = self.tran_b2.forward(torch.cat((full_joint_position, imu), dim=-1))
-        contact_probability, velocity, rnn_state = None, None, None
+        contact_probability = self.tran_b1.forward(torch.cat((leaf_joint_position, imu), dim=-1))[0]
+        velocity, rnn_state = self.tran_b2.forward(torch.cat((full_joint_position, imu), dim=-1), rnn_state)
+        # contact_probability, velocity = None, None
 
         return leaf_joint_position, full_joint_position, global_reduced_pose, contact_probability, velocity, rnn_state
         # return None, None, global_reduced_pose
 
 
+    # @torch.no_grad()
+    # def forward_offline(self, imu):
+    #     r"""
+    #     Offline forward.
+
+    #     :param imu: Tensor in shape [num_frame, input_dim(6 * 3 + 6 * 9)].
+    #     :return: Pose tensor in shape [num_frame, 24, 3, 3] and velocity tensor in shape [num_frame, 3].
+    #     """
+    #     _, _, global_reduced_pose, contact_probability, velocity, _ = self.predict(imu)
+
+    #     # calculate pose (local joint rotation matrices)
+    #     root_rotation = imu[:, 0, -9:].view(-1, 3, 3)
+
+    #     pose = self._reduced_glb_6d_to_full_local_mat(root_rotation.cpu(), global_reduced_pose.cpu())
+
+    #     return pose, torch.zeros((len(pose), 3))
+    
+
+    # @torch.no_grad()
+    # def forward_online(self, x):
+    #     r"""
+    #     Online forward.
+
+    #     :param x: A tensor in shape [input_dim(6 * 3 + 6 * 9)].
+    #     :return: Pose tensor in shape [24, 3, 3] and velocity tensor in shape [3].
+    #     """
+    #     imu = x.repeat(self.num_total_frame, 1, 1) if self.imu is None else torch.cat((self.imu[1:], x.view(1, 1, -1)))
+    #     _, _, global_reduced_pose, contact_probability, velocity, self.rnn_state = self.predict(imu)
+    #     # contact_probability = contact_probability[self.num_past_frame].sigmoid().view(-1).cpu()
+
+    #     # calculate pose (local joint rotation matrices)
+    #     root_rotation = imu[self.num_past_frame, 0, -9:].view(3, 3).cpu()
+    #     global_reduced_pose = global_reduced_pose[self.num_past_frame].cpu()
+    #     pose = self._reduced_glb_6d_to_full_local_mat(root_rotation, global_reduced_pose).squeeze(0)
+
+    #     return pose, torch.zeros((len(pose), 3))
+
     @torch.no_grad()
     def forward_offline(self, imu):
         r"""
         Offline forward.
-
         :param imu: Tensor in shape [num_frame, input_dim(6 * 3 + 6 * 9)].
-        :return: Pose tensor in shape [num_frame, 24, 3, 3] and velocity tensor in shape [num_frame, 3].
+        :return: Pose tensor in shape [num_frame, 24, 3, 3] and translation tensor in shape [num_frame, 3].
         """
+
         _, _, global_reduced_pose, contact_probability, velocity, _ = self.predict(imu)
 
         # calculate pose (local joint rotation matrices)
         root_rotation = imu[:, 0, -9:].view(-1, 3, 3)
-
+        
         pose = self._reduced_glb_6d_to_full_local_mat(root_rotation.cpu(), global_reduced_pose.cpu())
 
-        return pose, None
+        # # calculate velocity (translation between two adjacent frames in 60fps in world space)
+        # j = art.math.forward_kinematics(pose[:, joint_set.lower_body],
+        #                                 self.lower_body_bone.expand(pose.shape[0], -1, -1),
+        #                                 joint_set.lower_body_parent)[1]
         
+        # tran_b1_vel = self.gravity_velocity + art.math.lerp(
+        #     torch.cat((torch.zeros(1, 3, device=j.device), j[:-1, 7] - j[1:, 7])),
+        #     torch.cat((torch.zeros(1, 3, device=j.device), j[:-1, 8] - j[1:, 8])),
+        #     contact_probability.max(dim=-1).indices.view(-1, 1).cpu()
+        # )
+
+        # tran_b2_vel = root_rotation.bmm(velocity.transpose(1, 2)).squeeze(-1).cpu() * vel_scale / 60   # to world space
+        # weight = self._prob_to_weight(contact_probability.cpu().max(dim=-1).values.sigmoid()).view(-1, 1)
+        # velocity = art.math.lerp(tran_b2_vel, tran_b1_vel, weight)
+
+        # # remove penetration
+        # current_root_y = 0
+        # for i in range(velocity.shape[0]):
+        #     current_foot_y = current_root_y + j[i, 7:9, 1].min().item()
+        #     if current_foot_y + velocity[i, 1].item() <= self.floor_y:
+        #         velocity[i, 1] = self.floor_y - current_foot_y
+        #     current_root_y += velocity[i, 1].item()
+        velocity = torch.zeros((len(pose), 3))
+
+        return pose, self.velocity_to_root_position(velocity)
+
+    @torch.no_grad()
+    def forward_online(self, x):
+        r"""
+        Online forward.
+        :param x: A tensor in shape [input_dim(6 * 3 + 6 * 9)].
+        :return: Pose tensor in shape [24, 3, 3] and translation tensor in shape [3].
+        """
+        imu = x.repeat(self.num_total_frame, 1, 1) if self.imu is None else torch.cat((self.imu[1:], x.view(1, 1, -1)))
+
+        _, _, global_reduced_pose, contact_probability, velocity, rnn_state = self.predict(imu, self.rnn_state)
+        # contact_probability = contact_probability[self.num_past_frame].sigmoid().view(-1)
+
+        # calculate pose (local joint rotation matrices)
+        root_rotation = imu[self.num_past_frame, 0, -9:].view(3, 3)
+        global_reduced_pose = global_reduced_pose[self.num_past_frame]
+        pose = self._reduced_glb_6d_to_full_local_mat(root_rotation, global_reduced_pose).squeeze(0)
+        
+        # # calculate velocity (translation between two adjacent frames in 60fps in world space)
+        # lfoot_pos, rfoot_pos = art.math.forward_kinematics(pose[joint_set.lower_body].unsqueeze(0),
+        #                                                    self.lower_body_bone.unsqueeze(0),
+        #                                                    joint_set.lower_body_parent)[1][0, 7:9]
+        # if contact_probability[0] > contact_probability[1]:
+        #     tran_b1_vel = self.last_lfoot_pos - lfoot_pos + self.gravity_velocity
+        # else:
+        #     tran_b1_vel = self.last_rfoot_pos - rfoot_pos + self.gravity_velocity
+        # tran_b2_vel = root_rotation.mm(velocity[self.num_past_frame].view(3, 1)).view(3) / 60 * vel_scale
+        # weight = self._prob_to_weight(contact_probability.max())
+        # velocity = art.math.lerp(tran_b2_vel, tran_b1_vel, weight)
+
+        # # remove penetration
+        # current_foot_y = self.current_root_y + min(lfoot_pos[1].item(), rfoot_pos[1].item())
+        # if current_foot_y + velocity[1].item() <= self.floor_y:
+        #     velocity[1] = self.floor_y - current_foot_y
+
+        # self.current_root_y += velocity[1].item()
+        # self.last_lfoot_pos, self.last_rfoot_pos = lfoot_pos, rfoot_pos
+        self.imu = imu
+        # self.last_root_pos += velocity
+        return pose, self.last_root_pos.clone()
+
+        """
+        SIP Error (deg): 14.36 (+/- 7.95)
+        Angular Error (deg): 8.70 (+/- 4.94)
+        Positional Error (cm): 4.86 (+/- 2.97)
+        Mesh Error (cm): 6.05 (+/- 3.62)
+        Jitter Error (100m/s^3): 3.04 (+/- 5.17)
+        """
+    @staticmethod
+    def velocity_to_root_position(velocity):
+        r"""
+        Change velocity to root position. (not optimized)
+        :param velocity: Velocity tensor in shape [num_frame, 3].
+        :return: Translation tensor in shape [num_frame, 3] for root positions.
+        """
+        return torch.stack([velocity[:i+1].sum(dim=0) for i in range(velocity.shape[0])])
+
+
 class TransPoseNet3Stage(torch.nn.Module):
     r"""
     Whole pipeline for pose and translation estimation.
@@ -246,9 +381,9 @@ class TransPoseNet3Stage(torch.nn.Module):
         leaf_joint_position = self.pose_s1.forward(imu)[0]
         full_joint_position = self.pose_s2.forward(torch.cat((leaf_joint_position, imu), dim=-1))[0]
         global_reduced_pose = self.pose_s3.forward(torch.cat((full_joint_position, imu), dim=-1))[0]
-        contact_probability = self.tran_b1.forward(torch.cat((leaf_joint_position, imu), dim=-1))[0]
-        velocity, rnn_state = self.tran_b2.forward(torch.cat((full_joint_position, imu), dim=-1), rnn_state)
-        return leaf_joint_position, full_joint_position, global_reduced_pose, contact_probability, velocity, rnn_state
+        # contact_probability = self.tran_b1.forward(torch.cat((leaf_joint_position, imu), dim=-1))[0]
+        # velocity, rnn_state = self.tran_b2.forward(torch.cat((full_joint_position, imu), dim=-1), rnn_state)
+        return leaf_joint_position, full_joint_position, global_reduced_pose, None, None, rnn_state
     
     # def forward_my(self, input, rnn_state=None, refine=False):
     #     imu, leaf_jtr, full_jtr = input
@@ -311,38 +446,38 @@ class TransPoseNet3Stage(torch.nn.Module):
         :param imu: Tensor in shape [num_frame, input_dim(6 * 3 + 6 * 9)].
         :return: Pose tensor in shape [num_frame, 24, 3, 3] and velocity tensor in shape [num_frame, 3].
         """
-        _, _, global_reduced_pose, contact_probability, velocity, _ = self.forward(imu)
+        _, _, global_reduced_pose, _, _, _ = self.forward(imu)
 
         # calculate pose (local joint rotation matrices)
         root_rotation = imu[:, 0, -9:].view(-1, 3, 3)
-        velocity = velocity[:, 0]
+        # velocity = velocity[:, 0]
 
         pose = self._reduced_glb_6d_to_full_local_mat(root_rotation.cpu(), global_reduced_pose.cpu())
 
-        # calculate velocity (translation between two adjacent frames in 60fps in world space)
-        j = art.math.forward_kinematics(pose[:, joint_set.lower_body],
-                                        self.lower_body_bone.expand(pose.shape[0], -1, -1),
-                                        joint_set.lower_body_parent)[1]
+        # # calculate velocity (translation between two adjacent frames in 60fps in world space)
+        # j = art.math.forward_kinematics(pose[:, joint_set.lower_body],
+        #                                 self.lower_body_bone.expand(pose.shape[0], -1, -1),
+        #                                 joint_set.lower_body_parent)[1]
 
-        tran_b1_vel = self.gravity_velocity + art.math.lerp(
-            torch.cat((torch.zeros(1, 3, device=j.device), j[:-1, 7] - j[1:, 7])),
-            torch.cat((torch.zeros(1, 3, device=j.device), j[:-1, 8] - j[1:, 8])),
-            contact_probability.max(dim=-1).indices.view(-1, 1).cpu()
-        )
+        # tran_b1_vel = self.gravity_velocity + art.math.lerp(
+        #     torch.cat((torch.zeros(1, 3, device=j.device), j[:-1, 7] - j[1:, 7])),
+        #     torch.cat((torch.zeros(1, 3, device=j.device), j[:-1, 8] - j[1:, 8])),
+        #     contact_probability.max(dim=-1).indices.view(-1, 1).cpu()
+        # )
 
-        tran_b2_vel = root_rotation.bmm(velocity.unsqueeze(-1)).squeeze(-1).cpu() * vel_scale / 60   # to world space
-        weight = self._prob_to_weight(contact_probability.cpu().max(dim=-1).values.sigmoid()).view(-1, 1)
-        velocity = art.math.lerp(tran_b2_vel, tran_b1_vel, weight)
+        # tran_b2_vel = root_rotation.bmm(velocity.unsqueeze(-1)).squeeze(-1).cpu() * vel_scale / 60   # to world space
+        # weight = self._prob_to_weight(contact_probability.cpu().max(dim=-1).values.sigmoid()).view(-1, 1)
+        # velocity = art.math.lerp(tran_b2_vel, tran_b1_vel, weight)
 
-        # remove penetration
-        current_root_y = 0
-        for i in range(velocity.shape[0]):
-            current_foot_y = current_root_y + j[i, 7:9, 1].min().item()
-            if current_foot_y + velocity[i, 1].item() <= self.floor_y:
-                velocity[i, 1] = self.floor_y - current_foot_y
-            current_root_y += velocity[i, 1].item()
+        # # remove penetration
+        # current_root_y = 0
+        # for i in range(velocity.shape[0]):
+        #     current_foot_y = current_root_y + j[i, 7:9, 1].min().item()
+        #     if current_foot_y + velocity[i, 1].item() <= self.floor_y:
+        #         velocity[i, 1] = self.floor_y - current_foot_y
+        #     current_root_y += velocity[i, 1].item()
 
-        return pose, self.velocity_to_root_position(velocity)
+        return pose, torch.zeros((len(pose), 3))
 
     @torch.no_grad()
     def forward_online(self, x):
@@ -353,8 +488,8 @@ class TransPoseNet3Stage(torch.nn.Module):
         :return: Pose tensor in shape [24, 3, 3] and velocity tensor in shape [3].
         """
         imu = x.repeat(self.num_total_frame, 1, 1) if self.imu is None else torch.cat((self.imu[1:], x.view(1, 1, -1)))
-        _, _, global_reduced_pose, contact_probability, velocity, self.rnn_state = self.forward(imu, self.rnn_state)
-        contact_probability = contact_probability[self.num_past_frame].sigmoid().view(-1).cpu()
+        _, _, global_reduced_pose, _, _, self.rnn_state = self.forward(imu, self.rnn_state)
+        # contact_probability = contact_probability[self.num_past_frame].sigmoid().view(-1).cpu()
 
         # calculate pose (local joint rotation matrices)
         root_rotation = imu[self.num_past_frame, 0, -9:].view(3, 3).cpu()
@@ -362,26 +497,26 @@ class TransPoseNet3Stage(torch.nn.Module):
         pose = self._reduced_glb_6d_to_full_local_mat(root_rotation, global_reduced_pose).squeeze(0)
 
         # calculate velocity (translation between two adjacent frames in 60fps in world space)
-        lfoot_pos, rfoot_pos = art.math.forward_kinematics(pose[joint_set.lower_body].unsqueeze(0),
-                                                           self.lower_body_bone.unsqueeze(0),
-                                                           joint_set.lower_body_parent)[1][0, 7:9]
-        if contact_probability[0] > contact_probability[1]:
-            tran_b1_vel = self.last_lfoot_pos - lfoot_pos + self.gravity_velocity
-        else:
-            tran_b1_vel = self.last_rfoot_pos - rfoot_pos + self.gravity_velocity
-        tran_b2_vel = root_rotation.mm(velocity[self.num_past_frame].cpu().view(3, 1)).view(3) / 60 * vel_scale
-        weight = self._prob_to_weight(contact_probability.max())
-        velocity = art.math.lerp(tran_b2_vel, tran_b1_vel, weight)
+        # lfoot_pos, rfoot_pos = art.math.forward_kinematics(pose[joint_set.lower_body].unsqueeze(0),
+        #                                                    self.lower_body_bone.unsqueeze(0),
+        #                                                    joint_set.lower_body_parent)[1][0, 7:9]
+        # if contact_probability[0] > contact_probability[1]:
+        #     tran_b1_vel = self.last_lfoot_pos - lfoot_pos + self.gravity_velocity
+        # else:
+        #     tran_b1_vel = self.last_rfoot_pos - rfoot_pos + self.gravity_velocity
+        # tran_b2_vel = root_rotation.mm(velocity[self.num_past_frame].cpu().view(3, 1)).view(3) / 60 * vel_scale
+        # weight = self._prob_to_weight(contact_probability.max())
+        # velocity = art.math.lerp(tran_b2_vel, tran_b1_vel, weight)
 
-        # remove penetration
-        current_foot_y = self.current_root_y + min(lfoot_pos[1].item(), rfoot_pos[1].item())
-        if current_foot_y + velocity[1].item() <= self.floor_y:
-            velocity[1] = self.floor_y - current_foot_y
+        # # remove penetration
+        # current_foot_y = self.current_root_y + min(lfoot_pos[1].item(), rfoot_pos[1].item())
+        # if current_foot_y + velocity[1].item() <= self.floor_y:
+        #     velocity[1] = self.floor_y - current_foot_y
 
-        self.current_root_y += velocity[1].item()
-        self.last_lfoot_pos, self.last_rfoot_pos = lfoot_pos, rfoot_pos
+        # self.current_root_y += velocity[1].item()
+        # self.last_lfoot_pos, self.last_rfoot_pos = lfoot_pos, rfoot_pos
         self.imu = imu
-        self.last_root_pos += velocity
+        # self.last_root_pos += velocity
         return pose, self.last_root_pos.clone()
 
     @staticmethod
@@ -400,7 +535,7 @@ class TransPoseNet1Stage(torch.nn.Module):
     Whole pipeline for pose and translation estimation.
     """
     def __init__(self, num_past_frame=20, num_future_frame=5, hip_length=None, upper_leg_length=None,
-                 lower_leg_length=None, prob_threshold=(0.5, 0.9), gravity_velocity=-0.018):
+                 lower_leg_length=None, prob_threshold=(0.5, 0.9), gravity_velocity=-0.018, isMatrix=True, num_joint=6):
         r"""
         :param num_past_frame: Number of past frames for a biRNN window.
         :param num_future_frame: Number of future frames for a biRNN window.
@@ -411,9 +546,10 @@ class TransPoseNet1Stage(torch.nn.Module):
         :param gravity_velocity: The gravity velocity added to the Trans-B1 when the body is not on the ground.
         """
         super().__init__()
-        n_imu = 6 * 3 + 6 * 9   # acceleration (vector3) and rotation matrix (matrix3x3) of 6 IMUs
-        self.pose_net = RNN(n_imu,                         joint_set.n_reduced * 6,       256)
-        # self.tran_b1 = RNN(joint_set.n_leaf * 3 + n_imu,  2,                          64)
+        d = 9 if isMatrix else 6
+        n_imu = num_joint * (3 + d)   # acceleration (vector3) and rotation matrix (matrix3x3) of 6 IMUs
+        self.pose_net = RNN(n_imu,                         joint_set.n_reduced * 6,       256, dropout=0.2)
+        self.tran_b1 = RNN(joint_set.n_leaf * 3,  2,                          64)
         # self.tran_b2 = RNN(joint_set.n_full * 3 + n_imu,  3,                          256,    bidirectional=False)
 
         # lower body joint
@@ -575,46 +711,45 @@ class TransPoseNet1Stage(torch.nn.Module):
         :return: Pose tensor in shape [24, 3, 3] and velocity tensor in shape [3].
         """
         imu = x.repeat(self.num_total_frame, 1, 1) if self.imu is None else torch.cat((self.imu[1:], x.view(1, 1, -1)))
-        _, _, global_reduced_pose, contact_probability, velocity, self.rnn_state = self.forward(imu, self.rnn_state)
-        contact_probability = contact_probability[self.num_past_frame].sigmoid().view(-1).cpu()
+        global_reduced_pose, _, _, _ = self.forward(imu, self.rnn_state)
 
         # calculate pose (local joint rotation matrices)
         root_rotation = imu[self.num_past_frame, 0, -9:].view(3, 3).cpu()
         global_reduced_pose = global_reduced_pose[self.num_past_frame].cpu()
         pose = self._reduced_glb_6d_to_full_local_mat(root_rotation, global_reduced_pose).squeeze(0)
 
-        # calculate velocity (translation between two adjacent frames in 60fps in world space)
-        lfoot_pos, rfoot_pos = art.math.forward_kinematics(pose[joint_set.lower_body].unsqueeze(0),
-                                                           self.lower_body_bone.unsqueeze(0),
-                                                           joint_set.lower_body_parent)[1][0, 7:9]
-        if contact_probability[0] > contact_probability[1]:
-            tran_b1_vel = self.last_lfoot_pos - lfoot_pos + self.gravity_velocity
-        else:
-            tran_b1_vel = self.last_rfoot_pos - rfoot_pos + self.gravity_velocity
-        tran_b2_vel = root_rotation.mm(velocity[self.num_past_frame].cpu().view(3, 1)).view(3) / 60 * vel_scale
-        weight = self._prob_to_weight(contact_probability.max())
-        velocity = art.math.lerp(tran_b2_vel, tran_b1_vel, weight)
+        # # calculate velocity (translation between two adjacent frames in 60fps in world space)
+        # lfoot_pos, rfoot_pos = art.math.forward_kinematics(pose[joint_set.lower_body].unsqueeze(0),
+        #                                                    self.lower_body_bone.unsqueeze(0),
+        #                                                    joint_set.lower_body_parent)[1][0, 7:9]
+        # if contact_probability[0] > contact_probability[1]:
+        #     tran_b1_vel = self.last_lfoot_pos - lfoot_pos + self.gravity_velocity
+        # else:
+        #     tran_b1_vel = self.last_rfoot_pos - rfoot_pos + self.gravity_velocity
+        # tran_b2_vel = root_rotation.mm(velocity[self.num_past_frame].cpu().view(3, 1)).view(3) / 60 * vel_scale
+        # weight = self._prob_to_weight(contact_probability.max())
+        # velocity = art.math.lerp(tran_b2_vel, tran_b1_vel, weight)
 
-        # remove penetration
-        current_foot_y = self.current_root_y + min(lfoot_pos[1].item(), rfoot_pos[1].item())
-        if current_foot_y + velocity[1].item() <= self.floor_y:
-            velocity[1] = self.floor_y - current_foot_y
+        # # remove penetration
+        # current_foot_y = self.current_root_y + min(lfoot_pos[1].item(), rfoot_pos[1].item())
+        # if current_foot_y + velocity[1].item() <= self.floor_y:
+        #     velocity[1] = self.floor_y - current_foot_y
 
-        self.current_root_y += velocity[1].item()
-        self.last_lfoot_pos, self.last_rfoot_pos = lfoot_pos, rfoot_pos
+        # self.current_root_y += velocity[1].item()
+        # self.last_lfoot_pos, self.last_rfoot_pos = lfoot_pos, rfoot_pos
         self.imu = imu
-        self.last_root_pos += velocity
+        # self.last_root_pos += velocity
         return pose, self.last_root_pos.clone()
 
-    @staticmethod
-    def velocity_to_root_position(velocity):
-        r"""
-        Change velocity to root position. (not optimized)
+    # @staticmethod
+    # def velocity_to_root_position(velocity):
+    #     r"""
+    #     Change velocity to root position. (not optimized)
 
-        :param velocity: Velocity tensor in shape [num_frame, 3].
-        :return: Translation tensor in shape [num_frame, 3] for root positions.
-        """
-        return torch.stack([velocity[:i+1].sum(dim=0) for i in range(velocity.shape[0])])
+    #     :param velocity: Velocity tensor in shape [num_frame, 3].
+    #     :return: Translation tensor in shape [num_frame, 3] for root positions.
+    #     """
+    #     return torch.stack([velocity[:i+1].sum(dim=0) for i in range(velocity.shape[0])])
 
 
 
@@ -1112,14 +1247,14 @@ class TransAm(nn.Module):
         pose[:, joint_set.ignored] = torch.eye(3, device=pose.device)
         pose[:, 0] = root_rotation.view(-1, 3, 3)
         return pose
-        
+
 
 class TransPoseNet1StageSRU(torch.nn.Module):
     r"""
     Whole pipeline for pose and translation estimation.
     """
     def __init__(self, num_past_frame=20, num_future_frame=5, hip_length=None, upper_leg_length=None,
-                 lower_leg_length=None, prob_threshold=(0.5, 0.9), gravity_velocity=-0.018, isMatrix=True):
+                 lower_leg_length=None, prob_threshold=(0.5, 0.9), gravity_velocity=-0.018, isMatrix=True, num_joint=6, onlyori=False, smooth_alpha=0.6):
         r"""
         :param num_past_frame: Number of past frames for a biRNN window.
         :param num_future_frame: Number of future frames for a biRNN window.
@@ -1131,8 +1266,176 @@ class TransPoseNet1StageSRU(torch.nn.Module):
         """
         super().__init__()
         d = 9 if isMatrix else 6
-        n_imu = 6 * 3 + 6 * d   # acceleration (vector3) and rotation matrix (matrix3x3) of 6 IMUs
-        self.pose_net = RNN_SRU(n_imu,                         joint_set.n_reduced * 6,       256)
+        n_imu = num_joint*3 + num_joint * d   # acceleration (vector3) and rotation matrix (matrix3x3) of 6 IMUs
+        if onlyori:
+            n_imu -= num_joint *3
+        self.pose_net = RNN_SRU(n_imu,                         joint_set.n_reduced * 6,       256, n_rnn_layer=5)
+
+
+        
+        # self.tran_b1 = RNN_SRU(joint_set.n_leaf * 3,  2,                          64, n_rnn_layer=2)
+        # self.tran_b2 = RNN(joint_set.n_full * 3,  3,                          256,    bidirectional=False)
+
+        # lower body joint
+        self.m = art.ParametricModel(paths.male_smpl_file, device=torch.device("cuda:0"))
+        j, _ = self.m.get_zero_pose_joint_and_vertex()
+        b = art.math.joint_position_to_bone_vector(j[joint_set.lower_body].unsqueeze(0),
+                                                   joint_set.lower_body_parent).squeeze(0)
+        bone_orientation, bone_length = art.math.normalize_tensor(b, return_norm=True)
+        if hip_length is not None:
+            bone_length[1:3] = torch.tensor(hip_length)
+        if upper_leg_length is not None:
+            bone_length[3:5] = torch.tensor(upper_leg_length)
+        if lower_leg_length is not None:
+            bone_length[5:7] = torch.tensor(lower_leg_length)
+        b = bone_orientation * bone_length
+        b[:3] = 0
+
+        # constant
+        self.global_to_local_pose = self.m.inverse_kinematics_R
+        self.lower_body_bone = b
+        self.num_past_frame = num_past_frame
+        self.num_future_frame = num_future_frame
+        self.num_total_frame = num_past_frame + num_future_frame + 1
+        self.prob_threshold = prob_threshold
+        self.gravity_velocity = torch.tensor([0, gravity_velocity, 0]).cuda()
+        self.feet_pos = j[10:12].clone()
+        self.floor_y = j[10:12, 1].min().item()
+
+        # variable
+        self.rnn_state = None
+        self.imu = None
+        self.current_root_y = 0
+        self.last_lfoot_pos, self.last_rfoot_pos = self.feet_pos
+        self.last_root_pos = torch.zeros(3)
+        
+        
+        self.b, self.a = signal.butter(8, 0.2, 'lowpass')   #配置滤波器 8 表示滤波器的阶数
+        self.poseFilter_online = PoseFilter(smooth_alpha) if smooth_alpha!=-1 else None
+        self.poseFilter_offline = PoseFilter(smooth_alpha) if smooth_alpha!=-1 else None
+        self.reset()
+        # self.load_state_dict(torch.load(paths.weights_file))
+        # self.eval()
+
+    def _reduced_glb_6d_to_full_local_mat(self, root_rotation, glb_reduced_pose, filter=None):
+        if filter:glb_reduced_pose = torch.stack([filter.update(i) for i in glb_reduced_pose.view(-1, 15, 6)])
+        glb_reduced_pose = art.math.r6d_to_rotation_matrix(glb_reduced_pose).view(-1, joint_set.n_reduced, 3, 3)
+        global_full_pose = torch.eye(3, device=glb_reduced_pose.device).repeat(glb_reduced_pose.shape[0], 24, 1, 1)
+        global_full_pose[:, joint_set.reduced] = glb_reduced_pose
+        pose = self.global_to_local_pose(global_full_pose).view(-1, 24, 3, 3)
+        pose[:, joint_set.ignored] = torch.eye(3, device=pose.device)
+        pose[:, 0] = root_rotation.view(-1, 3, 3)
+        return pose
+        
+    def reset(self):
+        r"""
+        Reset online forward states.
+        """
+        self.rnn_state = None
+        self.imu = None
+        self.current_root_y = 0
+        self.last_lfoot_pos, self.last_rfoot_pos = self.feet_pos
+        self.last_root_pos = torch.zeros(3)
+        if self.poseFilter_offline:
+            self.poseFilter_offline.reset()
+            self.poseFilter_online.reset()
+        
+
+    def forward(self, imu, rnn_state=None):
+        global_reduced_pose, _ = self.pose_net.forward(imu)
+
+        # x1 = torch.cat((leaf_jtr, imu), dim=-1)
+        # x2 = torch.cat((full_jtr, imu), dim=-1)
+
+        # contact_probability = self.tran_b1.forward(x1)[0]
+        # velocity, rnn_state = self.tran_b2.forward(x2, rnn_state)
+        return global_reduced_pose, None, None, rnn_state
+    
+    def forward_my(self, input, rnn_state=None, refine=False):
+        imu, leaf_jtr, full_jtr =  input
+        if not refine: 
+            imu += torch.normal(mean=imu, std=0.04).to(imu.device)
+        global_reduced_pose = self.pose_net.forward(imu)[0]
+        # global_reduced_pose = torch.zeros((300, imu.shape[1], 15*6)).cuda()
+
+        # if not refine: 
+        #     leaf_jtr += torch.normal(mean=leaf_jtr, std=0.04).to(imu.device)
+        # contact_prob = self.tran_b1(leaf_jtr)[0].sigmoid()
+        contact_prob = None
+        return global_reduced_pose, contact_prob, None, rnn_state
+
+    @torch.no_grad()
+    def forward_offline(self, x):
+        r"""
+        Offline forward.
+
+        :param imu: Tensor in shape [num_frame, input_dim(6 * 3 + 6 * 9)].
+        :return: Pose tensor in shape [num_frame, 24, 3, 3] and velocity tensor in shape [num_frame, 3].
+        """
+        # print(x.shape)
+        imu = x
+        root_rotation = x[:, 0, -6:]
+        root_rotation = art.math.r6d_to_rotation_matrix(root_rotation)
+        
+        global_reduced_pose, contact_probability, velocity, _ = self.forward(imu) 
+        
+        # # calculate pose (local joint rotation matrices)
+        # root_rotation = imu[:, 0, -9:].view(-1, 3, 3)
+        # velocity = velocity[:, 0]
+        pose = self._reduced_glb_6d_to_full_local_mat(root_rotation, global_reduced_pose, self.poseFilter_offline)
+        # self.poseFilter_offline.reset()
+        
+        return pose, None
+
+    @torch.no_grad()
+    def forward_online(self, x):
+        r"""
+        Online forward.
+
+        :param x: A tensor in shape [input_dim(6 * 3 + 6 * 9)].
+        :return: Pose tensor in shape [24, 3, 3] and velocity tensor in shape [3].
+        """
+        imu = x.repeat(self.num_total_frame, 1, 1) if self.imu is None else torch.cat((self.imu[1:], x.view(1, 1, -1)))
+        # print(imu.shape)
+        global_reduced_pose, _, _, rnn_state = self.forward(imu, self.rnn_state)
+        # contact_probability = contact_probability[self.num_past_frame].sigmoid().view(-1).cpu()
+
+        # calculate pose (local joint rotation matrices)
+        root_rotation = imu[self.num_past_frame, 0, -6:]
+        root_rotation = art.math.r6d_to_rotation_matrix(root_rotation)
+        
+        global_reduced_pose = global_reduced_pose[self.num_past_frame]
+        pose = self._reduced_glb_6d_to_full_local_mat(root_rotation, global_reduced_pose, self.poseFilter_online).squeeze(0)
+
+        # self.poseFilter_online.reset()
+        self.rnn_state = rnn_state
+        self.imu = imu
+        return pose, torch.zeros((len(pose), 3))
+
+
+class TransPoseNet1StageSRU2(torch.nn.Module):
+    r"""
+    Whole pipeline for pose and translation estimation.
+    """
+    def __init__(self, num_past_frame=20, num_future_frame=5, hip_length=None, upper_leg_length=None,
+                 lower_leg_length=None, prob_threshold=(0.5, 0.9), gravity_velocity=-0.018, isMatrix=True, num_joint=6, onlyori=False):
+        r"""
+        :param num_past_frame: Number of past frames for a biRNN window.
+        :param num_future_frame: Number of future frames for a biRNN window.
+        :param hip_length: Hip length in meters. SMPL mean length is used by default. Float or tuple of 2.
+        :param upper_leg_length: Upper leg length in meters. SMPL mean length is used by default. Float or tuple of 2.
+        :param lower_leg_length: Lower leg length in meters. SMPL mean length is used by default. Float or tuple of 2.
+        :param prob_threshold: The probability threshold used to control the fusion of the two translation branches.
+        :param gravity_velocity: The gravity velocity added to the Trans-B1 when the body is not on the ground.
+        """
+        super().__init__()
+        d = 9 if isMatrix else 6
+        n_imu = num_joint*3 + num_joint * d   # acceleration (vector3) and rotation matrix (matrix3x3) of 6 IMUs
+        if onlyori:
+            n_imu -= num_joint *3
+        self.pose_net = RNN_SRU(n_imu,                         joint_set.n_reduced * 6,       256, n_rnn_layer=3)
+        # self.tran_b1 = RNN_SRU(joint_set.n_leaf * 3,  2,                          64)
+        # self.tran_b2 = RNN_SRU(joint_set.n_full * 3,  3,                          256,    bidirectional=False)
 
         # lower body joint
         self.m = art.ParametricModel(paths.male_smpl_file, device=torch.device("cuda:0"))
@@ -1180,11 +1483,7 @@ class TransPoseNet1StageSRU(torch.nn.Module):
         pose[:, joint_set.ignored] = torch.eye(3, device=pose.device)
         pose[:, 0] = root_rotation.view(-1, 3, 3)
         return pose
-
-    def _prob_to_weight(self, p):
-        return (p.clamp(self.prob_threshold[0], self.prob_threshold[1]) - self.prob_threshold[0]) / \
-               (self.prob_threshold[1] - self.prob_threshold[0])
-
+        
     def reset(self):
         r"""
         Reset online forward states.
@@ -1208,32 +1507,242 @@ class TransPoseNet1StageSRU(torch.nn.Module):
     def forward_my(self, input, rnn_state=None, refine=False):
         imu, leaf_jtr, full_jtr =  input
         if not refine: 
+            # print(imu.shape)
             imu += torch.normal(mean=imu, std=0.04).to(imu.device)
         global_reduced_pose = self.pose_net.forward(imu)[0]
         
         return global_reduced_pose, None, None, rnn_state
 
     @torch.no_grad()
-    def forward_offline(self, imu):
+    def forward_offline(self, x):
         r"""
         Offline forward.
 
         :param imu: Tensor in shape [num_frame, input_dim(6 * 3 + 6 * 9)].
         :return: Pose tensor in shape [num_frame, 24, 3, 3] and velocity tensor in shape [num_frame, 3].
         """
-        global_reduced_pose, contact_probability, velocity, _ = self.forward(imu)
+        print(x.shape)
+        imu = x
+        root_rotation = x[:, 0, -6:]
+        root_rotation = art.math.r6d_to_rotation_matrix(root_rotation)
+        
+        global_reduced_pose, contact_probability, velocity, _ = self.forward(imu) 
+
 
         # # calculate pose (local joint rotation matrices)
-        root_rotation = imu[:, 0, -9:].view(-1, 3, 3)
+        # root_rotation = imu[:, 0, -9:].view(-1, 3, 3)
         # velocity = velocity[:, 0]
 
         pose = self._reduced_glb_6d_to_full_local_mat(root_rotation, global_reduced_pose)
 
-        pose_6d = art.math.rotation_matrix_to_r6d(pose.clone()).reshape(-1, 24, 6).cpu()
-        tmp = np.empty(pose_6d.shape)
-        for c in range(6):
-            for j in range(24):
-                tmp[:, j, c] = signal.filtfilt(self.b, self.a, pose_6d[:, j, c].numpy().copy())  #data为要过滤的信号
-        tmp = torch.from_numpy(tmp).float()
-        pose = art.math.r6d_to_rotation_matrix(tmp).view(-1, 24, 3, 3)
+        # pose_6d = art.math.rotation_matrix_to_r6d(pose.clone()).reshape(-1, 24, 6).cpu()
+        # tmp = np.empty(pose_6d.shape)
+        # for c in range(6):
+        #     for j in range(24):
+        #         tmp[:, j, c] = signal.filtfilt(self.b, self.a, pose_6d[:, j, c].numpy().copy())  #data为要过滤的信号
+        # tmp = torch.from_numpy(tmp).float()
+        # pose = art.math.r6d_to_rotation_matrix(tmp).view(-1, 24, 3, 3)
         return pose, None
+
+
+# import torch.nn
+# from torch.nn.functional import relu
+# from config import *
+# import articulate as art
+
+
+# class RNN(torch.nn.Module):
+#     r"""
+#     An RNN Module including a linear input layer, an RNN, and a linear output layer.
+#     """
+#     def __init__(self, n_input, n_output, n_hidden, n_rnn_layer=2, bidirectional=True, dropout=0.2):
+#         super(RNN, self).__init__()
+#         self.rnn = torch.nn.LSTM(n_hidden, n_hidden, n_rnn_layer, bidirectional=bidirectional)
+#         self.linear1 = torch.nn.Linear(n_input, n_hidden)
+#         self.linear2 = torch.nn.Linear(n_hidden * (2 if bidirectional else 1), n_output)
+#         self.dropout = torch.nn.Dropout(dropout)
+
+#     def forward(self, x, h=None):
+#         x, h = self.rnn(relu(self.linear1(self.dropout(x))), h)
+#         return self.linear2(x), h
+
+
+# class TransPoseNet(torch.nn.Module):
+#     r"""
+#     Whole pipeline for pose and translation estimation.
+#     """
+#     def __init__(self, num_past_frame=20, num_future_frame=5, hip_length=None, upper_leg_length=None,
+#                  lower_leg_length=None, prob_threshold=(0.5, 0.9), gravity_velocity=-0.018):
+#         r"""
+#         :param num_past_frame: Number of past frames for a biRNN window.
+#         :param num_future_frame: Number of future frames for a biRNN window.
+#         :param hip_length: Hip length in meters. SMPL mean length is used by default. Float or tuple of 2.
+#         :param upper_leg_length: Upper leg length in meters. SMPL mean length is used by default. Float or tuple of 2.
+#         :param lower_leg_length: Lower leg length in meters. SMPL mean length is used by default. Float or tuple of 2.
+#         :param prob_threshold: The probability threshold used to control the fusion of the two translation branches.
+#         :param gravity_velocity: The gravity velocity added to the Trans-B1 when the body is not on the ground.
+#         """
+#         super().__init__()
+#         n_imu = 6 * 3 + 6 * 9   # acceleration (vector3) and rotation matrix (matrix3x3) of 6 IMUs
+#         self.pose_s1 = RNN(n_imu,                         joint_set.n_leaf * 3,       256)
+#         self.pose_s2 = RNN(joint_set.n_leaf * 3 + n_imu,  joint_set.n_full * 3,       64)
+#         self.pose_s3 = RNN(joint_set.n_full * 3 + n_imu,  joint_set.n_reduced * 6,    128)
+#         self.tran_b1 = RNN(joint_set.n_leaf * 3 + n_imu,  2,                          64)
+#         self.tran_b2 = RNN(joint_set.n_full * 3 + n_imu,  3,                          256,    bidirectional=False)
+
+#         # lower body joint
+#         m = art.ParametricModel(paths.male_smpl_file)
+#         j, _ = m.get_zero_pose_joint_and_vertex()
+#         b = art.math.joint_position_to_bone_vector(j[joint_set.lower_body].unsqueeze(0),
+#                                                    joint_set.lower_body_parent).squeeze(0)
+#         bone_orientation, bone_length = art.math.normalize_tensor(b, return_norm=True)
+#         if hip_length is not None:
+#             bone_length[1:3] = torch.tensor(hip_length)
+#         if upper_leg_length is not None:
+#             bone_length[3:5] = torch.tensor(upper_leg_length)
+#         if lower_leg_length is not None:
+#             bone_length[5:7] = torch.tensor(lower_leg_length)
+#         b = bone_orientation * bone_length
+#         b[:3] = 0
+
+#         # constant
+#         self.global_to_local_pose = m.inverse_kinematics_R
+#         self.lower_body_bone = b
+#         self.num_past_frame = num_past_frame
+#         self.num_future_frame = num_future_frame
+#         self.num_total_frame = num_past_frame + num_future_frame + 1
+#         self.prob_threshold = prob_threshold
+#         self.gravity_velocity = torch.tensor([0, gravity_velocity, 0])
+#         self.feet_pos = j[10:12].clone()
+#         self.floor_y = j[10:12, 1].min().item()
+
+#         # variable
+#         self.rnn_state = None
+#         self.imu = None
+#         self.current_root_y = 0
+#         self.last_lfoot_pos, self.last_rfoot_pos = self.feet_pos
+#         self.last_root_pos = torch.zeros(3)
+#         self.reset()
+
+#         self.load_state_dict(torch.load(paths.weights_file))
+#         self.eval()
+
+#     def _reduced_glb_6d_to_full_local_mat(self, root_rotation, glb_reduced_pose):
+#         glb_reduced_pose = art.math.r6d_to_rotation_matrix(glb_reduced_pose).view(-1, joint_set.n_reduced, 3, 3)
+#         global_full_pose = torch.eye(3, device=glb_reduced_pose.device).repeat(glb_reduced_pose.shape[0], 24, 1, 1)
+#         global_full_pose[:, joint_set.reduced] = glb_reduced_pose
+#         pose = self.global_to_local_pose(global_full_pose).view(-1, 24, 3, 3)
+#         pose[:, joint_set.ignored] = torch.eye(3, device=pose.device)
+#         pose[:, 0] = root_rotation.view(-1, 3, 3)
+#         return pose
+
+#     def _prob_to_weight(self, p):
+#         return (p.clamp(self.prob_threshold[0], self.prob_threshold[1]) - self.prob_threshold[0]) / \
+#                (self.prob_threshold[1] - self.prob_threshold[0])
+
+#     def reset(self):
+#         r"""
+#         Reset online forward states.
+#         """
+#         self.rnn_state = None
+#         self.imu = None
+#         self.current_root_y = 0
+#         self.last_lfoot_pos, self.last_rfoot_pos = self.feet_pos
+#         self.last_root_pos = torch.zeros(3)
+
+#     def forward(self, imu, rnn_state=None):
+#         leaf_joint_position = self.pose_s1.forward(imu)[0]
+#         full_joint_position = self.pose_s2.forward(torch.cat((leaf_joint_position, imu), dim=-1))[0]
+#         global_reduced_pose = self.pose_s3.forward(torch.cat((full_joint_position, imu), dim=-1))[0]
+#         contact_probability = self.tran_b1.forward(torch.cat((leaf_joint_position, imu), dim=-1))[0]
+#         velocity, rnn_state = self.tran_b2.forward(torch.cat((full_joint_position, imu), dim=-1), rnn_state)
+#         return leaf_joint_position, full_joint_position, global_reduced_pose, contact_probability, velocity, rnn_state
+
+#     @torch.no_grad()
+#     def forward_offline(self, imu):
+#         r"""
+#         Offline forward.
+#         :param imu: Tensor in shape [num_frame, input_dim(6 * 3 + 6 * 9)].
+#         :return: Pose tensor in shape [num_frame, 24, 3, 3] and translation tensor in shape [num_frame, 3].
+#         """
+
+#         _, _, global_reduced_pose, contact_probability, velocity, _ = self.forward(imu)
+
+#         # calculate pose (local joint rotation matrices)
+#         root_rotation = imu[:, 0, -9:].view(-1, 3, 3)
+        
+#         pose = self._reduced_glb_6d_to_full_local_mat(root_rotation.cpu(), global_reduced_pose.cpu())
+
+#         # calculate velocity (translation between two adjacent frames in 60fps in world space)
+#         j = art.math.forward_kinematics(pose[:, joint_set.lower_body],
+#                                         self.lower_body_bone.expand(pose.shape[0], -1, -1),
+#                                         joint_set.lower_body_parent)[1]
+        
+#         tran_b1_vel = self.gravity_velocity + art.math.lerp(
+#             torch.cat((torch.zeros(1, 3, device=j.device), j[:-1, 7] - j[1:, 7])),
+#             torch.cat((torch.zeros(1, 3, device=j.device), j[:-1, 8] - j[1:, 8])),
+#             contact_probability.max(dim=-1).indices.view(-1, 1).cpu()
+#         )
+
+#         tran_b2_vel = root_rotation.bmm(velocity.transpose(1, 2)).squeeze(-1).cpu() * vel_scale / 60   # to world space
+#         weight = self._prob_to_weight(contact_probability.cpu().max(dim=-1).values.sigmoid()).view(-1, 1)
+#         velocity = art.math.lerp(tran_b2_vel, tran_b1_vel, weight)
+
+#         # remove penetration
+#         current_root_y = 0
+#         for i in range(velocity.shape[0]):
+#             current_foot_y = current_root_y + j[i, 7:9, 1].min().item()
+#             if current_foot_y + velocity[i, 1].item() <= self.floor_y:
+#                 velocity[i, 1] = self.floor_y - current_foot_y
+#             current_root_y += velocity[i, 1].item()
+
+#         return pose, self.velocity_to_root_position(velocity)
+
+#     @torch.no_grad()
+#     def forward_online(self, x):
+#         r"""
+#         Online forward.
+#         :param x: A tensor in shape [input_dim(6 * 3 + 6 * 9)].
+#         :return: Pose tensor in shape [24, 3, 3] and translation tensor in shape [3].
+#         """
+#         imu = x.repeat(self.num_total_frame, 1, 1) if self.imu is None else torch.cat((self.imu[1:], x.view(1, 1, -1)))
+
+#         _, _, global_reduced_pose, contact_probability, velocity, self.rnn_state = self.forward(imu, self.rnn_state)
+#         contact_probability = contact_probability[self.num_past_frame].sigmoid().view(-1).cpu()
+
+#         # calculate pose (local joint rotation matrices)
+#         root_rotation = imu[self.num_past_frame, 0, -9:].view(3, 3).cpu()
+#         global_reduced_pose = global_reduced_pose[self.num_past_frame].cpu()
+#         pose = self._reduced_glb_6d_to_full_local_mat(root_rotation, global_reduced_pose).squeeze(0)
+
+#         # calculate velocity (translation between two adjacent frames in 60fps in world space)
+#         lfoot_pos, rfoot_pos = art.math.forward_kinematics(pose[joint_set.lower_body].unsqueeze(0),
+#                                                            self.lower_body_bone.unsqueeze(0),
+#                                                            joint_set.lower_body_parent)[1][0, 7:9]
+#         if contact_probability[0] > contact_probability[1]:
+#             tran_b1_vel = self.last_lfoot_pos - lfoot_pos + self.gravity_velocity
+#         else:
+#             tran_b1_vel = self.last_rfoot_pos - rfoot_pos + self.gravity_velocity
+#         tran_b2_vel = root_rotation.mm(velocity[self.num_past_frame].cpu().view(3, 1)).view(3) / 60 * vel_scale
+#         weight = self._prob_to_weight(contact_probability.max())
+#         velocity = art.math.lerp(tran_b2_vel, tran_b1_vel, weight)
+
+#         # remove penetration
+#         current_foot_y = self.current_root_y + min(lfoot_pos[1].item(), rfoot_pos[1].item())
+#         if current_foot_y + velocity[1].item() <= self.floor_y:
+#             velocity[1] = self.floor_y - current_foot_y
+
+#         self.current_root_y += velocity[1].item()
+#         self.last_lfoot_pos, self.last_rfoot_pos = lfoot_pos, rfoot_pos
+#         self.imu = imu
+#         self.last_root_pos += velocity
+#         return pose, self.last_root_pos.clone()
+
+#     @staticmethod
+#     def velocity_to_root_position(velocity):
+#         r"""
+#         Change velocity to root position. (not optimized)
+#         :param velocity: Velocity tensor in shape [num_frame, 3].
+#         :return: Translation tensor in shape [num_frame, 3] for root positions.
+#         """
+#         return torch.stack([velocity[:i+1].sum(dim=0) for i in range(velocity.shape[0])])
