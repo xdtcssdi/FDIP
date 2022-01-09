@@ -1254,7 +1254,7 @@ class TransPoseNet1StageSRU(torch.nn.Module):
     Whole pipeline for pose and translation estimation.
     """
     def __init__(self, num_past_frame=20, num_future_frame=5, hip_length=None, upper_leg_length=None,
-                 lower_leg_length=None, prob_threshold=(0.5, 0.9), gravity_velocity=-0.018, isMatrix=True, num_joint=6, onlyori=False, smooth_alpha=0.6):
+                 lower_leg_length=None, prob_threshold=(0.5, 0.9), gravity_velocity=-0.018, isMatrix=True, num_joint=6, onlyori=False, device=torch.device("cpu"), smooth_alpha=0.6):
         r"""
         :param num_past_frame: Number of past frames for a biRNN window.
         :param num_future_frame: Number of future frames for a biRNN window.
@@ -1277,7 +1277,7 @@ class TransPoseNet1StageSRU(torch.nn.Module):
         # self.tran_b2 = RNN(joint_set.n_full * 3,  3,                          256,    bidirectional=False)
 
         # lower body joint
-        self.m = art.ParametricModel(paths.male_smpl_file, device=torch.device("cuda:0"))
+        self.m = art.ParametricModel(paths.male_smpl_file, device=device)
         j, _ = self.m.get_zero_pose_joint_and_vertex()
         b = art.math.joint_position_to_bone_vector(j[joint_set.lower_body].unsqueeze(0),
                                                    joint_set.lower_body_parent).squeeze(0)
@@ -1298,7 +1298,7 @@ class TransPoseNet1StageSRU(torch.nn.Module):
         self.num_future_frame = num_future_frame
         self.num_total_frame = num_past_frame + num_future_frame + 1
         self.prob_threshold = prob_threshold
-        self.gravity_velocity = torch.tensor([0, gravity_velocity, 0]).cuda()
+        self.gravity_velocity = torch.tensor([0, gravity_velocity, 0]).to(device)
         self.feet_pos = j[10:12].clone()
         self.floor_y = j[10:12, 1].min().item()
 
@@ -1310,7 +1310,7 @@ class TransPoseNet1StageSRU(torch.nn.Module):
         self.last_root_pos = torch.zeros(3)
         
         
-        self.b, self.a = signal.butter(8, 0.2, 'lowpass')   #配置滤波器 8 表示滤波器的阶数
+        # self.b, self.a = signal.butter(8, 0.2, 'lowpass')   #配置滤波器 8 表示滤波器的阶数
         self.poseFilter_online = PoseFilter(smooth_alpha) if smooth_alpha!=-1 else None
         self.poseFilter_offline = PoseFilter(smooth_alpha) if smooth_alpha!=-1 else None
         self.reset()
@@ -1364,6 +1364,30 @@ class TransPoseNet1StageSRU(torch.nn.Module):
         contact_prob = None
         return global_reduced_pose, contact_prob, None, rnn_state
 
+    # @torch.no_grad()
+    # def forward_offline(self, x):
+    #     r"""
+    #     Offline forward.
+
+    #     :param imu: Tensor in shape [num_frame, input_dim(6 * 3 + 6 * 9)].
+    #     :return: Pose tensor in shape [num_frame, 24, 3, 3] and velocity tensor in shape [num_frame, 3].
+    #     """
+    #     # print(x.shape)
+    #     imu = x
+    #     root_rotation = x[:, 0, -6:]
+    #     root_rotation = art.math.r6d_to_rotation_matrix(root_rotation)
+        
+    #     global_reduced_pose, contact_probability, velocity, _ = self.forward(imu) 
+        
+    #     # # calculate pose (local joint rotation matrices)
+    #     # root_rotation = imu[:, 0, -9:].view(-1, 3, 3)
+    #     # velocity = velocity[:, 0]
+    #     pose = self._reduced_glb_6d_to_full_local_mat(root_rotation, global_reduced_pose, self.poseFilter_offline)
+  
+        
+    #     return pose, None
+
+
     @torch.no_grad()
     def forward_offline(self, x):
         r"""
@@ -1383,9 +1407,21 @@ class TransPoseNet1StageSRU(torch.nn.Module):
         # root_rotation = imu[:, 0, -9:].view(-1, 3, 3)
         # velocity = velocity[:, 0]
         pose = self._reduced_glb_6d_to_full_local_mat(root_rotation, global_reduced_pose, self.poseFilter_offline)
-        # self.poseFilter_offline.reset()
+    
+        print(imu.shape)
+        # joint_pos = self.m.forward_kinematics(pose)[1]
         
-        return pose, None
+        # stable_threshold = 0.008
+        # diff = joint_pos - torch.cat((joint_pos[:1], joint_pos[:-1]))
+        # contact_probability = (diff[:, [7, 8]].norm(dim=2) < stable_threshold).float()
+
+        # tran_b1_vel = self.gravity_velocity + art.math.lerp(
+        #     torch.cat((torch.zeros(1, 3, device=joint_pos.device), joint_pos[:-1, 7] - joint_pos[1:, 7])),
+        #     torch.cat((torch.zeros(1, 3, device=joint_pos.device), joint_pos[:-1, 8] - joint_pos[1:, 8])),
+        #     contact_probability.max(dim=1).indices.view(-1, 1)
+        # )
+        tran_b1_vel = torch.zeros((len(pose), 3)).to(pose.device)
+        return pose, tran_b1_vel
 
     @torch.no_grad()
     def forward_online(self, x):

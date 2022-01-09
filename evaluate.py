@@ -32,7 +32,7 @@ class PoseEvaluator:
 
 def evaluate_pose(dataset, num_past_frame=20, num_future_frame=5):
     isMatrix = False
-    device = torch.device('cpu')
+    device = torch.device('cuda:0')
     evaluator = PoseEvaluator()
     num_joints_in, in_features, num_joints_out = 6, (3+9), 15
     net = TransPoseNet1StageSRU(num_past_frame, num_future_frame, isMatrix=isMatrix, smooth_alpha=float(sys.argv[2])).to(device)
@@ -52,15 +52,15 @@ def evaluate_pose(dataset, num_past_frame=20, num_future_frame=5):
         # print(x.shape)
         # s = time.time()
         
-        online_results = [net.forward_online(f) for f in torch.cat((x, x[-1].repeat(num_future_frame, 1, 1)))]
+        # online_results = [net.forward_online(f) for f in torch.cat((x, x[-1].repeat(num_future_frame, 1, 1)))]
         # print(time.time()-s)
-        pose_p_online, tran_p_online = [torch.stack(_)[num_future_frame:] for _ in zip(*online_results)]
+        # pose_p_online, tran_p_online = [torch.stack(_)[num_future_frame:] for _ in zip(*online_results)]
         pose_p_offline, tran_p_offline = net.forward_offline(x)
         pose_t, tran_t = y
-
+        # print(time.time()-s)
         offline_errs.append(evaluator.eval(pose_p_offline, pose_t))
-        online_errs.append(evaluator.eval(pose_p_online, pose_t))
-        
+        # online_errs.append(evaluator.eval(pose_p_online, pose_t))
+        break
     print('============== offline ================')
     evaluator.print(torch.stack(offline_errs).mean(dim=0))
     print('============== online ================')
@@ -106,26 +106,29 @@ if __name__ == '__main__':
 
 
 # def evaluate_pose(dataset, num_past_frame=20, num_future_frame=5):
-#     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+#     device = torch.device('cuda:0')
 #     evaluator = PoseEvaluator()
 #     net = TransPoseNet(num_past_frame, num_future_frame).to(device)
-#     net.eval()
 #     net.load_state_dict(torch.load(sys.argv[1]))
+#     net.eval()
 #     data = torch.load(os.path.join(dataset, 'test.pt'))
 #     xs = [normalize_and_concat(a, r).to(device) for a, r in zip(data['acc'], data['ori'])]
 #     ys = [(art.math.axis_angle_to_rotation_matrix(p).view(-1, 24, 3, 3), t) for p, t in zip(data['pose'], data['tran'])]
 #     offline_errs, online_errs = [], []
+#     import time
 #     for x, y in tqdm.tqdm(list(zip(xs, ys))):
 #         net.reset()
 #         x = x.unsqueeze(1)
-        
+#         s = time.time()
 #         online_results = [net.forward_online(f) for f in torch.cat((x, x[-1].repeat(num_future_frame, 1, 1)))]
 #         pose_p_online, tran_p_online = [torch.stack(_)[num_future_frame:] for _ in zip(*online_results)]
-#         pose_p_offline, tran_p_offline = net.forward_offline(x)
+#         print(time.time()-s)
+#         # pose_p_offline, tran_p_offline = net.forward_offline(x)
 #         pose_t, tran_t = y
 #         # print(pose_p_offline.shape, pose_t.shape)
-#         offline_errs.append(evaluator.eval(pose_p_offline, pose_t))
+#         # offline_errs.append(evaluator.eval(pose_p_offline, pose_t))
 #         online_errs.append(evaluator.eval(pose_p_online, pose_t))
+#         break
 #     print('============== offline ================')
 #     evaluator.print(torch.stack(offline_errs).mean(dim=0))
 #     print('============== online ================')
@@ -135,4 +138,4 @@ if __name__ == '__main__':
 # if __name__ == '__main__':
 #     # torch.backends.cudnn.enabled = False   # if cudnn error, uncomment this line
 #     evaluate_pose(paths.dipimu_dir)
-#     evaluate_pose(paths.totalcapture_dir)
+#     # evaluate_pose(paths.totalcapture_dir)

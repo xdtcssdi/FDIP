@@ -9,15 +9,15 @@ from config import paths, joint_set
 from utils import normalize_and_concat
 import os
 import articulate as art
-sample_idx =0 
+sample_idx =2
 
 def Our():
     isMatrix = False
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-    net = TransPoseNet1StageSRU(isMatrix=isMatrix).to(device)
-    net.eval()
+    net = TransPoseNet1StageSRU(isMatrix=isMatrix, device=device).to(device)
     checkpoint = torch.load("结果/best/checkpoint_fineturning_1980.tar")
     net.load_state_dict(checkpoint['state_dict'])
+    net.eval()
     data = torch.load(os.path.join(paths.dipimu_dir, 'test.pt'))
     acc = data['acc'][sample_idx]
     ori = data['ori'][sample_idx]
@@ -28,9 +28,9 @@ def Our():
 
     x = normalize_and_concat(acc, ori,isMatrix=isMatrix).to(device)
     x = x.unsqueeze(1)
-    # pose, tran = net.forward_offline(x)     # offline
-    pose, tran = [torch.stack(_) for _ in zip(*[net.forward_online(f) for f in x])]   # online
-    tran = torch.zeros((len(pose), 3)).to(device)
+    pose, tran = net.forward_offline(x)     # offline
+    # pose, tran = [torch.stack(_) for _ in zip(*[net.forward_online(f) for f in x])]   # online
+    # tran = torch.zeros((len(pose), 3)).to(device)
     art.ParametricModel(paths.male_smpl_file, device=device).view_motion([pose], [tran])
 
 def tranPose():
@@ -38,9 +38,9 @@ def tranPose():
     isMatrix = True
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     net = TransPoseNet().to(device)
-    net.eval()
     checkpoint = torch.load("data/weights.pt")
     net.load_state_dict(checkpoint)
+    net.eval()
     data = torch.load(os.path.join(paths.dipimu_dir, 'test.pt'))
     acc = data['acc'][sample_idx]
     ori = data['ori'][sample_idx]
@@ -84,5 +84,5 @@ def DIP():
     # pose, tran = [torch.stack(_) for _ in zip(*[net.forward_online(f) for f in x])]   # online
     art.ParametricModel(paths.male_smpl_file, device=device).view_motion([pose], [tran])
 
-tranPose()
-# Our()
+# tranPose()
+Our()
